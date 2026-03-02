@@ -1,24 +1,46 @@
 /**
  * webtop_scrape.mjs — Webtop SmartSchool scraper
  *
- * MODES:
- *   Normal run (headless, uses saved session):
- *     WEBTOP_USER=xxx WEBTOP_PASS=yyy node webtop_scrape.mjs
+ * Uses a PERSISTENT BROWSER PROFILE (.webtop_profile/) so the site's auth
+ * token (sessionStorage/cookies) survives between runs without re-login.
  *
- *   First-time session capture (headed, you solve reCAPTCHA manually):
- *     WEBTOP_CAPTURE=true node webtop_scrape.mjs
+ * FIRST-TIME SETUP (run once, headed browser opens):
+ *   WEBTOP_CAPTURE=true node webtop_scrape.mjs
+ *   → Browser opens → log in manually → profile saved → browser closes
+ *
+ * NORMAL RUN (headless, reuses saved profile):
+ *   node webtop_scrape.mjs
  *
  * ENV:
- *   WEBTOP_USER        login username
- *   WEBTOP_PASS        login password
- *   WEBTOP_CAPTURE     set to "true" to open browser for manual CAPTCHA solve
- *   WEBTOP_SESSION     path to session file (default: .webtop_session.json)
+ *   WEBTOP_USER        login username (used only if session is invalid)
+ *   WEBTOP_PASS        login password (used only if session is invalid)
+ *   WEBTOP_CAPTURE     set to "true" to open browser for manual login
+ *   WEBTOP_PROFILE     path to browser profile dir (default: .webtop_profile)
  *   WEBTOP_HEADLESS    override headless mode ("false" to watch)
  */
 
 import { chromium } from "playwright";
-import { existsSync, writeFileSync, readFileSync } from "fs";
-import { resolve } from "path";
+import { resolve, dirname, join } from "path";
+import { readFileSync, existsSync } from "fs";
+import { fileURLToPath } from "url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ── Load .env (same as push_scrape / push_loop) ─────────────────────────────────
+function loadEnv() {
+  const envPath = join(__dirname, ".env");
+  if (!existsSync(envPath)) return;
+  for (const line of readFileSync(envPath, "utf8").split("\n")) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const eq = t.indexOf("=");
+    if (eq < 0) continue;
+    const key = t.slice(0, eq).trim();
+    const val = t.slice(eq + 1).trim().replace(/^["']|["']$/g, "");
+    if (key && !process.env[key]) process.env[key] = val;
+  }
+}
+loadEnv();
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const BASE_URL      = "https://webtop.smartschool.co.il";
@@ -28,7 +50,7 @@ const DASHBOARD_URL = `${BASE_URL}/dashboard`;
 const USER         = process.env.WEBTOP_USER;
 const PASS         = process.env.WEBTOP_PASS;
 const CAPTURE_MODE = process.env.WEBTOP_CAPTURE === "true";
-const SESSION_FILE = resolve(process.env.WEBTOP_SESSION || ".webtop_session.json");
+const PROFILE_DIR  = resolve(process.env.WEBTOP_PROFILE || ".webtop_profile");
 const HEADLESS     = CAPTURE_MODE ? false : (process.env.WEBTOP_HEADLESS !== "false");
 const TIMEOUT      = 30_000;
 
@@ -37,16 +59,6 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function out(data) {
   process.stdout.write(JSON.stringify(data, null, 2) + "\n");
-}
-
-function loadSession() {
-  if (!existsSync(SESSION_FILE)) return null;
-  try { return JSON.parse(readFileSync(SESSION_FILE, "utf8")); }
-  catch { return null; }
-}
-
-function saveSession(state) {
-  writeFileSync(SESSION_FILE, JSON.stringify(state), "utf8");
 }
 
 // ── Notification parser ────────────────────────────────────────────────────────
@@ -154,6 +166,63 @@ function isRealNotification(n, raw) {
   );
 }
 
+// ── Student switcher helpers ───────────────────────────────────────────────
+// Detects all students from the mat-select dropdown in the portal nav.
+// Returns an array of student name strings, or null if only one student
+// (or if no mat-select is found).
+async function getAllStudents(page) {
+  const matSelect = page.locator("mat-select").first();
+  if ((await matSelect.count()) === 0) return null;
+
+  await matSelect.click();
+  await sleep(800);
+
+  // Options are rendered in an overlay appended to body
+  const opts = page.locator("mat-option");
+  await opts.first().waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
+  const names = (await opts.allTextContents()).map((t) => t.trim()).filter(Boolean);
+
+  // Close dropdown
+  await page.keyboard.press("Escape");
+  await sleep(400);
+
+  return names.length > 1 ? names : null;
+}
+
+// Switches the portal to show data for a different student.
+// Must be called while on the dashboard page.
+async function switchToStudent(page, name) {
+  if (!page.url().includes("/dashboard")) {
+    await page.goto(DASHBOARD_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+    await sleep(800);
+  }
+
+  const matSelect = page.locator("mat-select").first();
+  await matSelect.click();
+  await sleep(800);
+
+  // Find matching option — exact text match first, fallback to contains
+  const opts = page.locator("mat-option");
+  await opts.first().waitFor({ state: "visible", timeout: 5000 });
+  const allOpts = await opts.all();
+  let clicked = false;
+  for (const opt of allOpts) {
+    const text = (await opt.textContent() || "").trim();
+    if (text === name) {
+      await opt.click();
+      clicked = true;
+      break;
+    }
+  }
+  if (!clicked) {
+    // fallback: partial match
+    await page.locator("mat-option").filter({ hasText: name }).first().click();
+  }
+
+  await page.waitForLoadState("networkidle", { timeout: TIMEOUT });
+  await sleep(1000);
+}
+
 // ── Login ─────────────────────────────────────────────────────────────────────
 async function doLogin(page) {
   if (CAPTURE_MODE) {
@@ -176,18 +245,32 @@ async function doLogin(page) {
   await page.goto(LOGIN_URL, { waitUntil: "networkidle", timeout: TIMEOUT });
   await sleep(1000);
 
-  // Fill username — placeholder "שם משתמש *"
-  const userInput = page.getByPlaceholder(/שם משתמש/);
+  // Fill username — Angular Material input (no placeholder attr, use type selector)
+  const userInput = page.locator('input[type="text"].mat-input-element').first();
   await userInput.waitFor({ timeout: TIMEOUT });
   await userInput.fill(USER);
 
-  // Fill password — placeholder "סיסמה *"
-  const passInput = page.getByPlaceholder(/סיסמה/);
+  // Fill password — Angular Material password input
+  const passInput = page.locator('input[type="password"]').first();
   await passInput.fill(PASS);
+
+  // Wait for the submit button to become enabled (reCAPTCHA must pass first)
+  // Try up to 45 seconds for the button to enable
+  const submitBtn = page.locator('button[type="submit"]').first();
+  await page.waitForFunction(
+    () => {
+      const btn = document.querySelector('button[type="submit"]');
+      return btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true';
+    },
+    { timeout: 45000 }
+  ).catch(() => {
+    // Button still disabled — try clicking anyway (some reCAPTCHA v3 may auto-pass)
+    process.stderr.write('Warning: submit button still disabled after 45s, attempting click anyway\n');
+  });
 
   await Promise.all([
     page.waitForURL(/dashboard/, { timeout: TIMEOUT }),
-    page.getByRole("button", { name: /כניסה/ }).click(),
+    submitBtn.click(),
   ]);
 }
 
@@ -316,15 +399,18 @@ async function extractNotifications(page) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 (async () => {
-  const browser = await chromium.launch({
+  // ── Persistent browser profile ────────────────────────────────────────────
+  // launchPersistentContext stores ALL browser state (cookies, localStorage,
+  // sessionStorage, IndexedDB) in PROFILE_DIR across runs — so the site's JWT
+  // auth token is preserved and reCAPTCHA trust builds up over time.
+  // First-time setup: run with WEBTOP_CAPTURE=true once to log in manually.
+  const context = await chromium.launchPersistentContext(PROFILE_DIR, {
     headless: HEADLESS,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
-
-  const savedSession = loadSession();
-
-  const context = await browser.newContext({
-    storageState: savedSession ?? undefined,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-blink-features=AutomationControlled",
+    ],
     userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     locale: "he-IL",
     timezoneId: "Asia/Jerusalem",
@@ -344,59 +430,104 @@ async function extractNotifications(page) {
   if (needsLogin) {
     if (!CAPTURE_MODE && !USER) {
       out({ ok: false, error: "Not logged in and no credentials. Run with WEBTOP_CAPTURE=true first." });
-      await browser.close();
+      await context.close();
       process.exit(1);
     }
     await doLogin(page);
   }
 
-  // ── Save session after login ───────────────────────────────────────────────
-  const sessionState = await context.storageState();
-  saveSession(sessionState);
-
   if (CAPTURE_MODE) {
-    out({ ok: true, message: "Session saved. Run without WEBTOP_CAPTURE to scrape data." });
-    await browser.close();
+    out({ ok: true, message: "Profile saved to " + PROFILE_DIR + ". Run without WEBTOP_CAPTURE to scrape data." });
+    await context.close();
     return;
   }
 
   // ── Navigate back to dashboard if needed ──────────────────────────────────
   if (!page.url().includes("/dashboard")) {
     await page.goto(DASHBOARD_URL, { waitUntil: "networkidle", timeout: TIMEOUT });
+    await sleep(800);
   }
 
-  // ── Extract dashboard data ─────────────────────────────────────────────────
-  const dashboard = await extractDashboard(page);
+  // ── Detect all available students from portal switcher ────────────────────
+  const studentList = await getAllStudents(page).catch((e) => {
+    process.stderr.write(`[warn] Student detection failed: ${e.message}\n`);
+    return null;
+  });
 
-  // ── Extract notifications ──────────────────────────────────────────────────
-  const rawNotifications = await extractNotifications(page);
+  const classEventsByStudent = {};
+  let   allNotifications     = [];
+  let   mainDashboard        = null;
 
-  // Parse and filter notifications into structured objects
-  const notifications = rawNotifications
-    .map(raw => ({ parsed: parseNotification(raw), raw }))
-    .filter(({ parsed, raw }) => isRealNotification(parsed, raw))
-    .map(({ parsed }) => parsed);
+  // ── Multi-student extraction loop ─────────────────────────────────────────
+  // loopStudents is null-guarded: null means "no switching, single student"
+  const loopStudents = (studentList && studentList.length > 1) ? studentList : [null];
 
-  await browser.close();
+  for (let i = 0; i < loopStudents.length; i++) {
+    const studentName = loopStudents[i];
+
+    // Switch portal to this student (skip for single-student accounts)
+    if (studentName !== null) {
+      await switchToStudent(page, studentName);
+    }
+
+    // Extract dashboard card data (classEvents, homework, grades, …)
+    const dashboard = await extractDashboard(page);
+    if (!mainDashboard) mainDashboard = dashboard;
+
+    // Store class events keyed by student name
+    if (studentName !== null) {
+      classEventsByStudent[studentName] = dashboard.classEvents || [];
+    }
+
+    // Extract notifications for this student (navigates to /התראות)
+    const rawNotifs = await extractNotifications(page);
+    const notifs = rawNotifs
+      .map((raw) => ({ parsed: parseNotification(raw), raw }))
+      .filter(({ parsed, raw }) => isRealNotification(parsed, raw))
+      .map(({ parsed }) => parsed);
+
+    allNotifications.push(...notifs);
+
+    // Return to dashboard before switching to next student
+    if (studentName !== null && i < loopStudents.length - 1) {
+      await page.goto(DASHBOARD_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+      await sleep(800);
+    }
+  }
+
+  // ── Single-student fallback: map classEvents to detected student name ──────
+  if (!studentList || studentList.length <= 1) {
+    mainDashboard = mainDashboard || {};
+    const uniqueNames = [...new Set(allNotifications.map((n) => n.student).filter(Boolean))];
+    for (const name of uniqueNames) {
+      if (!classEventsByStudent[name]) {
+        classEventsByStudent[name] = mainDashboard.classEvents || [];
+      }
+    }
+  }
+
+  await context.close();
 
   out({
     ok: true,
     extractedAt: new Date().toISOString(),
     url: DASHBOARD_URL,
     data: {
-      studentName: dashboard.studentName,
-      classEvents: dashboard.classEvents,
-      homework: dashboard.homework,
-      grades: dashboard.grades,
-      tables: dashboard.tables,
-      notifications,
+      studentName:          mainDashboard?.studentName || "",
+      classEvents:          mainDashboard?.classEvents || [],   // backward compat (first student)
+      classEventsByStudent,                                      // NEW: per-student class events
+      homework:             mainDashboard?.homework    || [],
+      grades:               mainDashboard?.grades      || [],
+      tables:               mainDashboard?.tables      || [],
+      notifications:        allNotifications,
       _debug: {
-        headingsFound: dashboard._headingsFound,
+        headingsFound:  mainDashboard?._headingsFound || [],
+        studentsFound:  studentList || [],
       },
     },
-    count: (dashboard.classEvents?.length || 0) +
-           (dashboard.homework?.length || 0) +
-           (notifications?.length || 0),
+    count: (mainDashboard?.classEvents?.length || 0) +
+           (mainDashboard?.homework?.length    || 0) +
+           (allNotifications?.length           || 0),
   });
 
 })().catch((e) => {

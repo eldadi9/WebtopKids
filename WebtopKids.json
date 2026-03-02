@@ -24,7 +24,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "http://localhost:3001/api/data?refresh=1",
+        "url": "http://76.13.8.113:3001/api/data?refresh=1",
         "options": {}
       },
       "id": "http-webtop",

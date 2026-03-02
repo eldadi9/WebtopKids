@@ -24,4 +24,4 @@ ssh "$SERVER" "
 "
 
 echo "✅ Deployed to $SERVER:$REMOTE_PATH"
-echo "   Dashboard: http://$SERVER:3000"
+echo "   Dashboard: http://$SERVER:3001"
