@@ -1492,7 +1492,27 @@ function calcDaysLeft(dateStr) {
   return Math.round((hwDate - now) / (1000 * 60 * 60 * 24));
 }
 
+/* ─── Theme toggle (Dark / Light) ──────────────────────────────────────── */
+const THEME_KEY = 'webtopkids_theme';
+function getTheme() { return localStorage.getItem(THEME_KEY) || 'dark'; }
+function setTheme(theme) {
+  localStorage.setItem(THEME_KEY, theme);
+  document.body.classList.toggle('theme-light', theme === 'light');
+  const icon = document.querySelector('.theme-icon');
+  if (icon) icon.textContent = theme === 'light' ? '🌙' : '☀️';
+}
+function toggleTheme() {
+  const next = getTheme() === 'dark' ? 'light' : 'dark';
+  setTheme(next);
+}
+function initTheme() {
+  setTheme(getTheme());
+  const btn = document.getElementById('btn-theme');
+  if (btn) btn.addEventListener('click', toggleTheme);
+}
+
 /* ─── Auto-refresh every 15 min + init ─────────────────────────────────── */
 setInterval(fetchAll, 15 * 60 * 1000);
+initTheme();
 initPhotoUpload();
 fetchAll();

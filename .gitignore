@@ -9,8 +9,16 @@ npm-debug.log*
 # Playwright session (contains login cookies)
 .webtop_session.json
 
+# Browser profile (cookies, session — NEVER commit)
+.webtop_profile/
+
 # Runtime data
 homework_status.json
+data_cache.json
+sent_reminders.json
+push_scrape.log
+daemon.log
+nul
 
 # Python
 __pycache__/

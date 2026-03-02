@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=2" />
+  <link rel="stylesheet" href="style.css?v=3" />
 </head>
 <body>
 
@@ -64,6 +64,9 @@
           <span id="data-time"  class="last-update" title="נתונים מהאתר"></span>
           <span id="sync-time"  class="last-update sync-status" title="בדיקה אחרונה"></span>
         </div>
+        <button id="btn-theme" class="btn-theme" title="החלף מצב (כהה/בהיר)" aria-label="החלף ערכת נושא">
+          <span class="theme-icon">☀️</span>
+        </button>
         <button id="btn-refresh" class="btn-refresh" onclick="refresh()" title="רענן נתונים">
           <span class="refresh-icon">🔄</span>
         </button>
@@ -174,6 +177,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=2"></script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>
