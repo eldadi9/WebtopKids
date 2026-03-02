@@ -379,22 +379,89 @@ async function extractDashboard(page) {
 // ── Notifications page ────────────────────────────────────────────────────────
 async function extractNotifications(page) {
   try {
-    // Click "התראות" in sidebar
-    const notifLink = page.getByRole("link", { name: /התראות/ }).first();
-    if (await notifLink.isVisible({ timeout: 5000 }).catch(() => false)) {
-      await notifLink.click();
-      await page.waitForLoadState("networkidle", { timeout: TIMEOUT });
-      await sleep(500);
+    // Click "התראות" in sidebar — try multiple selectors (portal may have changed)
+    let notifLink = page.getByRole("link", { name: /התראות/ }).first();
+    if (!(await notifLink.isVisible({ timeout: 3000 }).catch(() => false))) {
+      notifLink = page.locator("a:has-text('התראות')").first();
+    }
+    if (!(await notifLink.isVisible({ timeout: 2000 }).catch(() => false))) {
+      if (process.env.WEBTOP_DEBUG === "1") process.stderr.write("[debug] 'התראות' link not found\n");
+      return [];
+    }
+    await notifLink.click();
+    await page.waitForLoadState("networkidle", { timeout: TIMEOUT });
+    await sleep(800);
 
-      return await page.evaluate(() => {
-        const items = Array.from(document.querySelectorAll(
-          "tr, [class*='notification'], [class*='alert'], [class*='row'], li"
-        ));
-        return items.map(el => el.textContent.trim().replace(/\s+/g, " ")).filter(Boolean);
+    const items = await page.evaluate(() => {
+      const sel = "tr, [class*='notification'], [class*='alert'], [class*='row'], [class*='item'], li, mat-row";
+      const nodes = Array.from(document.querySelectorAll(sel));
+      return nodes.map(el => el.textContent.trim().replace(/\s+/g, " ")).filter(t => t.length > 20);
+    });
+    return items;
+  } catch (e) {
+    if (process.env.WEBTOP_DEBUG === "1") process.stderr.write(`[debug] extractNotifications error: ${e.message}\n`);
+    return [];
+  }
+}
+
+// ── Messages page (הודעות) ───────────────────────────────────────────────────
+async function extractMessages(page) {
+  const messages = [];
+  try {
+    let msgLink = page.getByRole("link", { name: /הודעות/ }).first();
+    if (!(await msgLink.isVisible({ timeout: 2000 }).catch(() => false))) {
+      msgLink = page.locator("a:has-text('הודעות')").first();
+    }
+    if (!(await msgLink.isVisible({ timeout: 2000 }).catch(() => false))) {
+      try {
+        await page.goto(`${BASE_URL}/messages`, { waitUntil: "domcontentloaded", timeout: 8000 });
+      } catch {
+        return [];
+      }
+    } else {
+      await msgLink.click();
+      await page.waitForLoadState("networkidle", { timeout: TIMEOUT });
+    }
+    await sleep(600);
+
+    const rows = await page.evaluate(() => {
+      const items = [];
+      const rows = document.querySelectorAll("tr, [class*='message'], [class*='mail'], mat-row, .mat-mdc-row");
+      for (const row of rows) {
+        const text = row.textContent.trim().replace(/\s+/g, " ");
+        if (text.length < 30) continue;
+        const cells = row.querySelectorAll("td, [class*='cell']");
+        let from = "", subject = "", date = "", body = "", read = false;
+        if (cells.length >= 2) {
+          from = cells[0]?.textContent.trim() || "";
+          subject = cells[1]?.textContent.trim() || "";
+          if (cells.length >= 3) date = cells[2]?.textContent.trim() || "";
+          if (cells.length >= 4) body = cells[3]?.textContent.trim() || "";
+        } else {
+          const noRead = row.querySelector("[class*='unread'], [class*='bold'], .msg-unread");
+          read = !noRead;
+          subject = text.slice(0, 80);
+        }
+        if (subject || from) items.push({ from, subject, date, body, read });
+      }
+      return items;
+    });
+
+    for (const r of rows) {
+      const [datePart, timePart] = (r.date || "").split(/\s+/);
+      messages.push({
+        from: r.from || "",
+        subject: r.subject || "(ללא נושא)",
+        date: datePart || null,
+        time: timePart || null,
+        body: (r.body || "").slice(0, 500),
+        read: !!r.read,
       });
     }
-  } catch {}
-  return [];
+  } catch (e) {
+    if (process.env.WEBTOP_DEBUG === "1") process.stderr.write(`[debug] extractMessages error: ${e.message}\n`);
+  }
+  return messages;
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -449,17 +516,28 @@ async function extractNotifications(page) {
   }
 
   // ── Detect all available students from portal switcher ────────────────────
-  const studentList = await getAllStudents(page).catch((e) => {
+  let studentList = await getAllStudents(page).catch((e) => {
     process.stderr.write(`[warn] Student detection failed: ${e.message}\n`);
     return null;
   });
+
+  // Fallback: use children_config when portal dropdown not found (2+ children)
+  if ((!studentList || studentList.length < 2) && existsSync(join(__dirname, "children_config.json"))) {
+    try {
+      const cc = JSON.parse(readFileSync(join(__dirname, "children_config.json"), "utf8"));
+      const names = (cc.children || []).map((c) => c.name).filter(Boolean);
+      if (names.length > 1) {
+        studentList = names;
+        process.stderr.write(`[info] Using children_config: ${names.join(", ")}\n`);
+      }
+    } catch {}
+  }
 
   const classEventsByStudent = {};
   let   allNotifications     = [];
   let   mainDashboard        = null;
 
   // ── Multi-student extraction loop ─────────────────────────────────────────
-  // loopStudents is null-guarded: null means "no switching, single student"
   const loopStudents = (studentList && studentList.length > 1) ? studentList : [null];
 
   for (let i = 0; i < loopStudents.length; i++) {
@@ -486,6 +564,14 @@ async function extractNotifications(page) {
       .filter(({ parsed, raw }) => isRealNotification(parsed, raw))
       .map(({ parsed }) => parsed);
 
+    if (process.env.WEBTOP_DEBUG === "1") {
+      process.stderr.write(`[debug] Student: ${studentName || "(single)"} | raw items: ${rawNotifs.length} | passed: ${notifs.length}\n`);
+      if (rawNotifs.length > 0 && notifs.length === 0) {
+        const sample = rawNotifs[0].slice(0, 150);
+        process.stderr.write(`[debug] Sample raw: "${sample}..."\n`);
+      }
+    }
+
     allNotifications.push(...notifs);
 
     // Return to dashboard before switching to next student
@@ -506,6 +592,9 @@ async function extractNotifications(page) {
     }
   }
 
+  // ── Extract messages (הודעות) — once per account ───────────────────────────
+  const messages = await extractMessages(page).catch(() => []);
+
   await context.close();
 
   out({
@@ -520,6 +609,7 @@ async function extractNotifications(page) {
       grades:               mainDashboard?.grades      || [],
       tables:               mainDashboard?.tables      || [],
       notifications:        allNotifications,
+      messages:             messages,
       _debug: {
         headingsFound:  mainDashboard?._headingsFound || [],
         studentsFound:  studentList || [],

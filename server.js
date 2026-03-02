@@ -5,22 +5,45 @@ import { dirname, join } from 'path';
 import { spawn } from 'child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ─── Load .env (Node doesn't load it automatically) ──────────────────────────
+function loadEnv() {
+  const envPath = join(__dirname, '.env');
+  if (!existsSync(envPath)) return;
+  try {
+    for (const line of readFileSync(envPath, 'utf8').split('\n')) {
+      const t = line.trim();
+      if (!t || t.startsWith('#')) continue;
+      const eq = t.indexOf('=');
+      if (eq < 0) continue;
+      const key = t.slice(0, eq).trim();
+      const val = t.slice(eq + 1).trim().replace(/^["']|["']$/g, '');
+      if (key && !process.env[key]) process.env[key] = val;
+    }
+  } catch (e) { console.warn('[env] Load failed:', e.message); }
+}
+loadEnv();
 const app = express();
 app.use(express.json());
 app.use(express.static(join(__dirname, 'public')));
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 3000;
-const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const PORT             = process.env.PORT || 3000;
+const TELEGRAM_TOKEN   = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || '').trim();
-const STATUS_FILE = join(__dirname, 'homework_status.json');
-const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+const STATUS_FILE         = join(__dirname, 'homework_status.json');
+const DATA_CACHE_FILE     = join(__dirname, 'data_cache.json');
+const SPECIAL_EVENTS_FILE = join(__dirname, 'special_events.json');
+const REMINDERS_FILE      = join(__dirname, 'sent_reminders.json'); // persists across PM2 restarts
+const CHILDREN_CONFIG_FILE = join(__dirname, 'children_config.json');
 
 // ─── In-memory cache ──────────────────────────────────────────────────────────
 let cache = { data: null, timestamp: 0 };
 
-// Track which deadline reminders were already sent this session
-const sentReminders = new Set();
+// ─── Trigger flag (phone → VPS → home machine) ────────────────────────────────
+let triggerPending = false;
+let triggerRequestedAt = null;
 
 // ─── Homework status persistence ──────────────────────────────────────────────
 function loadStatus() {
@@ -29,40 +52,79 @@ function loadStatus() {
   } catch {}
   return {};
 }
-
 function saveStatus(status) {
   writeFileSync(STATUS_FILE, JSON.stringify(status, null, 2));
 }
 
-// ─── Homework ID helper (must match frontend) ─────────────────────────────────
-function hwId(n) {
-  return `${n.subject || ''}_${n.date || ''}_${n.lesson || ''}`;
+// ─── Persistent data cache (survives PM2 restart) ─────────────────────────────
+function loadCacheFromFile() {
+  try {
+    if (!existsSync(DATA_CACHE_FILE)) return;
+    const saved = JSON.parse(readFileSync(DATA_CACHE_FILE, 'utf8'));
+    if (saved?.data) {
+      cache = { data: saved.data, timestamp: saved.timestamp || Date.now() };
+      const ageMin = Math.round((Date.now() - cache.timestamp) / 1000 / 60);
+      console.log(`[cache] Loaded from disk — ${ageMin} min old`);
+    }
+  } catch (e) {
+    console.warn('[cache] Failed to load from disk:', e.message);
+  }
 }
+function saveCacheToFile() {
+  try { writeFileSync(DATA_CACHE_FILE, JSON.stringify(cache)); }
+  catch (e) { console.warn('[cache] Failed to save to disk:', e.message); }
+}
+
+// ─── Special events (birthdays, parent meetings) ──────────────────────────────
+function loadSpecialEvents() {
+  try {
+    if (existsSync(SPECIAL_EVENTS_FILE))
+      return JSON.parse(readFileSync(SPECIAL_EVENTS_FILE, 'utf8'));
+  } catch {}
+  return [];
+}
+
+// ─── Per-child configuration (subjects, grade, birthdate) ─────────────────────
+function loadChildrenConfig() {
+  try {
+    if (existsSync(CHILDREN_CONFIG_FILE))
+      return JSON.parse(readFileSync(CHILDREN_CONFIG_FILE, 'utf8'));
+  } catch {}
+  return { children: [] };
+}
+
+// ─── Sent-reminders persistence (survive PM2 restart — avoid re-alerting) ─────
+function loadSentReminders() {
+  try {
+    if (existsSync(REMINDERS_FILE))
+      return new Set(JSON.parse(readFileSync(REMINDERS_FILE, 'utf8')));
+  } catch {}
+  return new Set();
+}
+function saveSentReminders() {
+  try { writeFileSync(REMINDERS_FILE, JSON.stringify([...sentReminders])); }
+  catch {}
+}
+
+const sentReminders = loadSentReminders(); // ← persisted across restarts
+
+// ─── ID helpers ───────────────────────────────────────────────────────────────
+function hwId(n)    { return `${n.subject || ''}_${n.date || ''}_${n.lesson || ''}`; }
+function notifId(n) { return `${n.type}_${n.student}_${n.subject}_${n.date}_${n.lesson}`; }
 
 // ─── Scraper runner ───────────────────────────────────────────────────────────
 function runScraper() {
   return new Promise((resolve, reject) => {
     const scraperPath = join(__dirname, 'webtop_scrape.mjs');
-    const env = {
-      ...process.env,
-      WEBTOP_SESSION: join(__dirname, '.webtop_session.json'),
-    };
-
-    // Use the same node binary running the server — avoids PATH issues on Windows
+    const env = { ...process.env, WEBTOP_SESSION: join(__dirname, '.webtop_session.json') };
     const proc = spawn(process.execPath, [scraperPath], { env, cwd: __dirname });
-
-    let stdout = '';
-    let stderr = '';
+    let stdout = '', stderr = '';
     proc.stdout.on('data', d => (stdout += d));
     proc.stderr.on('data', d => (stderr += d));
     proc.on('close', code => {
       if (code !== 0) return reject(new Error(`Scraper exited ${code}: ${stderr.slice(0, 500)}`));
-      try {
-        const result = JSON.parse(stdout.trim());
-        resolve(result);
-      } catch {
-        reject(new Error(`JSON parse failed: ${stdout.slice(0, 300)}`));
-      }
+      try { resolve(JSON.parse(stdout.trim())); }
+      catch { reject(new Error(`JSON parse failed: ${stdout.slice(0, 300)}`)); }
     });
   });
 }
@@ -72,95 +134,350 @@ async function sendTelegram(text) {
   if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) return;
   try {
     await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-      method: 'POST',
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text, parse_mode: 'HTML' }),
+      body:    JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text, parse_mode: 'HTML' }),
     });
   } catch (e) {
     console.error('Telegram error:', e.message);
   }
 }
 
-// ─── Deadline reminder scheduler ──────────────────────────────────────────────
-function startDeadlineReminders() {
-  async function checkDeadlines() {
-    if (!cache.data?.data?.notifications) return;
-    const status = loadStatus();
-    const now = new Date();
+// ─── New-alert Telegram sender ────────────────────────────────────────────────
+// Fires IMMEDIATELY when a push arrives with notifications not seen before.
+// Covers: late, absence, missing_equipment, grade, homework_not_done
+const ALERT_EMOJI = {
+  late:              '⏰',
+  absence:           '🚫',
+  missing_equipment: '🎒',
+  grade:             '⭐',
+  homework_not_done: '📚',
+};
+const ALERT_NAME = {
+  late:              'איחור',
+  absence:           'חיסור',
+  missing_equipment: 'ציוד חסר',
+  grade:             'ציון חדש',
+  homework_not_done: 'שיעורי בית לא הוכנו',
+};
+const ALERT_TYPES_SET = new Set([
+  'late', 'absence', 'missing_equipment', 'grade', 'homework_not_done',
+]);
 
-    const notifications = cache.data.data.notifications;
-    for (const n of notifications) {
-      if (n.type !== 'homework' || !n.date) continue;
-      const id = hwId(n);
-      if (status[id]?.done) continue;       // already done
-      if (sentReminders.has(id)) continue;  // reminder already sent this session
+async function sendNewAlerts(newNotifications, prevIds) {
+  for (const n of newNotifications) {
+    if (!ALERT_TYPES_SET.has(n.type)) continue;
+    if (prevIds.has(notifId(n))) continue; // not new
 
-      // Parse "DD/MM/YYYY"
-      const [dd, mm, yyyy] = n.date.split('/').map(Number);
-      if (!dd || !mm || !yyyy) continue;
-      const hwDate = new Date(yyyy, mm - 1, dd);
-      const daysLeft = (hwDate - now) / (1000 * 60 * 60 * 24);
-
-      // Send if 0 < daysLeft ≤ 1 (due tomorrow or sooner, but not already past)
-      if (daysLeft > 0 && daysLeft <= 1) {
-        sentReminders.add(id);
-        const textLines = [
-          `⏰ <b>תזכורת — שיעורי בית!</b>`,
-          `📚 מקצוע: ${n.subject || '?'}`,
-          `👦 תלמיד: ${n.student || '?'}`,
-          `📅 מועד הגשה: ${n.date} (שיעור ${n.lesson || '?'})`,
-          n.homeworkText ? `📝 תוכן: ${n.homeworkText}` : '',
-          `⚠️ לא סומן כהושלם עדיין!`,
-        ].filter(Boolean).join('\n');
-        await sendTelegram(textLines);
+    // Skip impossible absences (before 7am — school doesn't open that early)
+    if (n.type === 'absence' && n.alertTime) {
+      const alertH = parseInt(n.alertTime.split(':')[0], 10);
+      if (!isNaN(alertH) && alertH < 7) {
+        console.log(`[alert] Skipped impossible absence at ${n.alertTime} — ${n.student}/${n.date}`);
+        continue;
       }
     }
-  }
+    // Skip stale non-grade alerts (>45 days old) — avoid ancient Telegram spam
+    if (n.type !== 'grade' && n.date) {
+      const [dd, mm, yyyy] = n.date.split('/').map(Number);
+      if (dd && mm && yyyy) {
+        const nDate   = new Date(yyyy, mm - 1, dd);
+        const daysOld = Math.round((Date.now() - nDate.getTime()) / (1000 * 60 * 60 * 24));
+        if (daysOld > 45) {
+          console.log(`[alert] Skipped stale alert (${daysOld}d old) — ${n.type} / ${n.subject}`);
+          continue;
+        }
+      }
+    }
 
-  // Run at startup (after 1 min delay) and every hour
-  setTimeout(checkDeadlines, 60 * 1000);
-  setInterval(checkDeadlines, 60 * 60 * 1000);
+    const emoji = ALERT_EMOJI[n.type] || '⚠️';
+    const name  = ALERT_NAME[n.type]  || n.type;
+
+    const lines = [
+      `${emoji} <b>התראה חדשה — ${name}!</b>`,
+      '',
+      n.student  ? `👤 תלמיד/ה: <b>${n.student}</b>`  : '',
+      n.subject  ? `📖 מקצוע: <b>${n.subject}</b>`     : '',
+      n.alertDay ? `📅 ${n.alertDay}` : (n.date ? `📅 תאריך: ${n.date}` : ''),
+      n.lesson   ? `🔢 שיעור ${n.lesson}`              : '',
+    ];
+
+    // Grade: extract the numeric score from description
+    if (n.type === 'grade') {
+      const scoreMatch = (n.description || '').match(/(\d+)/);
+      if (scoreMatch) lines.push(`📊 ציון: <b>${scoreMatch[1]}</b>`);
+      else if (n.description) lines.push(`📋 ${n.description.slice(0, 200)}`);
+    }
+
+    // Homework not done: show what was missing
+    if (n.type === 'homework_not_done' && n.description) {
+      lines.push(`📋 ${n.description.slice(0, 200)}`);
+    }
+
+    await sendTelegram(lines.filter(Boolean).join('\n'));
+    console.log(`[alert] Sent Telegram for new ${n.type}: ${n.subject} / ${n.student}`);
+  }
+}
+
+// ─── Deadline reminder checker ─────────────────────────────────────────────────
+// Two tiers:
+//   Tier 1 (key: id_1d) → due within 24h   → 🟠 urgent
+//   Tier 2 (key: id_3d) → due within 1–3d  → 🟡 early warning
+// Called both at push time AND every hour.
+async function checkDeadlines() {
+  if (!cache.data?.data?.notifications) return;
+  const status = loadStatus();
+  const now    = new Date();
+
+  for (const n of cache.data.data.notifications) {
+    if (n.type !== 'homework' || !n.date) continue;
+    const id = hwId(n);
+    if (status[id]?.done) continue; // marked done by parent
+
+    const [dd, mm, yyyy] = n.date.split('/').map(Number);
+    if (!dd || !mm || !yyyy) continue;
+    const hwDate  = new Date(yyyy, mm - 1, dd);
+    const daysLeft = (hwDate - now) / (1000 * 60 * 60 * 24);
+    if (daysLeft <= 0) continue; // past due, skip
+
+    // ── Tier 1: due within 24 hours ──────────────────────────────────────────
+    if (daysLeft <= 1 && !sentReminders.has(`${id}_1d`)) {
+      sentReminders.add(`${id}_1d`);
+      saveSentReminders();
+      const urgency = daysLeft <= 0.5 ? '🔴 היום!!' : '🟠 מחר!!';
+      await sendTelegram([
+        `⏰ <b>תזכורת דחופה — שיעורי בית!</b>`,
+        ``,
+        `📚 מקצוע: <b>${n.subject || '?'}</b>`,
+        `👧 תלמיד/ה: <b>${n.student || '?'}</b>`,
+        `📅 מועד הגשה: ${n.date} — ${urgency}`,
+        n.homeworkText ? `📝 מטלה: ${n.homeworkText}` : '',
+        `⚠️ לא סומן כהושלם עדיין!`,
+      ].filter(Boolean).join('\n'));
+      console.log(`[deadline] Sent 24h reminder: ${n.subject} / ${n.student}`);
+    }
+
+    // ── Tier 2: 1–3 days in advance ──────────────────────────────────────────
+    else if (daysLeft > 1 && daysLeft <= 3 && !sentReminders.has(`${id}_3d`)) {
+      sentReminders.add(`${id}_3d`);
+      saveSentReminders();
+      const daysNum = Math.ceil(daysLeft);
+      await sendTelegram([
+        `🟡 <b>תזכורת מוקדמת — שיעורי בית</b>`,
+        ``,
+        `📚 מקצוע: <b>${n.subject || '?'}</b>`,
+        `👧 תלמיד/ה: <b>${n.student || '?'}</b>`,
+        `📅 מועד הגשה: ${n.date} — עוד <b>${daysNum} ימים</b>`,
+        n.homeworkText ? `📝 מטלה: ${n.homeworkText}` : '',
+      ].filter(Boolean).join('\n'));
+      console.log(`[deadline] Sent ${daysNum}d advance reminder: ${n.subject} / ${n.student}`);
+    }
+  }
+}
+
+function startDeadlineReminders() {
+  setTimeout(checkDeadlines, 60 * 1000);        // 1 min after startup
+  setInterval(checkDeadlines, 60 * 60 * 1000);  // every hour
+}
+
+// ─── Local scheduled scraper (VPS runs scraper itself — no home-machine daemon) ─
+async function runLocalScrape() {
+  console.log('[scrape] Running local scraper...');
+  try {
+    const prevIds = new Set((cache.data?.data?.notifications || []).map(notifId));
+    const raw     = await runScraper();
+    const nowISO  = new Date().toISOString();
+    cache = { data: { ...raw, extractedAt: nowISO }, timestamp: Date.now() };
+    saveCacheToFile();
+    const newNotifications = raw?.data?.notifications || [];
+    await sendNewAlerts(newNotifications, prevIds);
+    await checkDeadlines();
+    console.log(`[scrape] Done — ${newNotifications.length} notifications`);
+  } catch (e) {
+    console.error('[scrape] Local scrape failed:', e.message);
+  }
+}
+
+function startLocalScraper() {
+  // Opt-out: set USE_LOCAL_SCRAPER=false in .env to disable (useful when pushing from home machine)
+  if (process.env.USE_LOCAL_SCRAPER === 'false') {
+    console.log('[scrape] Local scraper disabled (USE_LOCAL_SCRAPER=false) — expecting push from home machine');
+    return;
+  }
+  console.log('[scrape] Local scraper enabled — first run in 30s, then every 15 min');
+  setTimeout(runLocalScrape, 30 * 1000);          // first run 30s after startup
+  setInterval(runLocalScrape, 15 * 60 * 1000);    // then every 15 min
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
+const PUSH_SECRET = (process.env.PUSH_SECRET || 'webtop2026').trim();
 
-// GET /api/data — scraper with 15-min cache
-app.get('/api/data', async (req, res) => {
-  const forceRefresh = req.query.refresh === '1';
-  const now = Date.now();
-
-  if (!forceRefresh && cache.data && now - cache.timestamp < CACHE_TTL_MS) {
-    return res.json({ ...cache.data, cached: true, cacheAge: Math.round((now - cache.timestamp) / 1000) });
-  }
-
+// POST /api/push — receive scraped data from local machine
+app.post('/api/push', async (req, res) => {
   try {
-    const result = await runScraper();
-    cache = { data: result, timestamp: now };
-    res.json({ ...result, cached: false });
-  } catch (err) {
-    if (cache.data) {
-      return res.json({ ...cache.data, cached: true, stale: true, error: err.message });
+    const { secret, data } = req.body || {};
+    if (secret !== PUSH_SECRET) {
+      console.warn('[push] Rejected: wrong secret');
+      return res.status(403).json({ ok: false, error: 'Unauthorized' });
     }
-    res.status(500).json({ ok: false, error: err.message });
+    if (!data) return res.status(400).json({ ok: false, error: 'missing data' });
+
+    // Capture previous IDs BEFORE updating cache
+    const prevIds = new Set((cache.data?.data?.notifications || []).map(notifId));
+
+    // Update in-memory + disk cache
+    const nowISO = new Date().toISOString();
+    cache = { data: { ...data, extractedAt: nowISO }, timestamp: Date.now() };
+    saveCacheToFile();
+
+    const newNotifications = data?.data?.notifications || [];
+
+    // 1. Instant alerts for late/absence/missing_equipment/grade/homework_not_done
+    await sendNewAlerts(newNotifications, prevIds);
+
+    // 2. Deadline check — also run at push time (not just hourly)
+    await checkDeadlines();
+
+    // 3. New message Telegram alerts
+    const newMessages = data?.data?.messages || [];
+    for (const m of newMessages) {
+      if (m.read) continue; // already read — skip
+      const msgKey = `msg_${m.from || ''}_${m.date || ''}_${(m.subject || '').slice(0, 30)}`;
+      if (sentReminders.has(msgKey)) continue;
+      sentReminders.add(msgKey);
+      saveSentReminders();
+      const lines = [
+        `📨 <b>הודעה חדשה מהמורה!</b>`,
+        ``,
+        m.student  ? `👤 ל: <b>${m.student}</b>` : '',
+        m.from     ? `✉️ מאת: <b>${m.from}</b>${m.fromRole ? ` (${m.fromRole})` : ''}` : '',
+        `📌 נושא: <b>${m.subject || '(ללא נושא)'}</b>`,
+        m.date     ? `📅 ${m.date}${m.time ? ` | ${m.time}` : ''}` : '',
+        m.body     ? `\n📝 ${m.body.slice(0, 300)}` : '',
+      ].filter(Boolean).join('\n');
+      await sendTelegram(lines);
+      console.log(`[messages] Sent Telegram for new message: "${m.subject}" from ${m.from}`);
+    }
+
+    console.log(`[push] Received ${newNotifications.length} notifications at ${nowISO}`);
+    res.json({ ok: true, received: true, count: newNotifications.length });
+  } catch (e) {
+    console.error('[push] Error:', e.message);
+    res.status(500).json({ ok: false, error: 'internal error' });
   }
+});
+
+// GET /api/data — serve from cache
+app.get('/api/data', (req, res) => {
+  if (cache.data) {
+    const cacheAge = Math.round((Date.now() - cache.timestamp) / 1000);
+    const stale    = cacheAge > 30 * 60; // stale after 30 min
+    return res.json({ ...cache.data, cached: true, cacheAge, stale });
+  }
+  res.status(503).json({
+    ok: false,
+    error: 'No data yet — run push_scrape.bat on the home computer',
+    pushRequired: true,
+  });
 });
 
 // GET /api/status — homework done/undone map
-app.get('/api/status', (req, res) => {
-  res.json(loadStatus());
+app.get('/api/status', (req, res) => { res.json(loadStatus()); });
+
+// GET /api/events — special events (birthdays, parent meetings)
+app.get('/api/events', (req, res) => { res.json(loadSpecialEvents()); });
+
+// GET /api/children — per-child config (valid subjects, grade, birthdate)
+app.get('/api/children', (req, res) => { res.json(loadChildrenConfig()); });
+
+// POST /api/children/:name/photo — save base64 photo for a child
+app.post('/api/children/:name/photo', express.json({ limit: '10mb' }), (req, res) => {
+  const name  = decodeURIComponent(req.params.name);
+  const { photo } = req.body || {};
+  if (!photo) return res.status(400).json({ ok: false, error: 'missing photo' });
+  const config = loadChildrenConfig();
+  const child  = (config.children || []).find(c => c.name === name);
+  if (!child) return res.status(404).json({ ok: false, error: 'child not found' });
+  child.photo = photo; // base64 data URL
+  try {
+    writeFileSync(CHILDREN_CONFIG_FILE, JSON.stringify(config, null, 2));
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
-// POST /api/homework/done — ID in request body (avoids Hebrew '/' in URL routing)
+// GET /api/insights — computed smart summary from current cache + status
+app.get('/api/insights', (req, res) => {
+  const notifications = cache.data?.data?.notifications || [];
+  const status        = loadStatus();
+  const now           = new Date();
+  now.setHours(0, 0, 0, 0);
+
+  const sevenDaysAgo = new Date(now);
+  sevenDaysAgo.setDate(now.getDate() - 7);
+
+  const ALERT_TYPES_INS = new Set(['late', 'absence', 'missing_equipment', 'homework_not_done', 'grade']);
+  let overduePendingCount = 0;  // homework past due and NOT marked done
+  let upcoming48hCount    = 0;  // homework due within 48h and NOT marked done
+  let alertsRecentCount   = 0;  // any alert-type notification in last 7 days
+  let alertsThisWeek      = 0;  // alert-type notifications in current 7-day window
+  let alertsLastWeek      = 0;  // alert-type notifications in prior 7-day window
+
+  const oneWeekAgo  = new Date(now); oneWeekAgo.setDate(now.getDate() - 7);
+  const twoWeeksAgo = new Date(now); twoWeeksAgo.setDate(now.getDate() - 14);
+
+  for (const n of notifications) {
+    if (!n.date) continue;
+    const [dd, mm, yyyy] = n.date.split('/').map(Number);
+    if (!dd || !mm || !yyyy) continue;
+    const nDate    = new Date(yyyy, mm - 1, dd);
+    const daysLeft = Math.round((nDate - now) / (1000 * 60 * 60 * 24));
+
+    // Skip impossible absences (before 7am — school is closed then)
+    if (n.type === 'absence' && n.alertTime) {
+      const alertH = parseInt(n.alertTime.split(':')[0], 10);
+      if (!isNaN(alertH) && alertH < 7) continue;
+    }
+    // Skip stale non-grade/homework alerts (older than 45 days — not actionable)
+    if (!['grade', 'homework'].includes(n.type) && daysLeft < -45) continue;
+
+    if (n.type === 'homework') {
+      const id = `${n.subject || ''}_${n.date || ''}_${n.lesson || ''}`;
+      if (!status[id]?.done) {
+        if (daysLeft < 0) overduePendingCount++;
+        if (daysLeft >= 0 && daysLeft <= 2) upcoming48hCount++;
+      }
+    } else if (ALERT_TYPES_INS.has(n.type)) {
+      if (nDate >= sevenDaysAgo)  alertsRecentCount++;
+      if (nDate >= oneWeekAgo)    alertsThisWeek++;
+      else if (nDate >= twoWeeksAgo) alertsLastWeek++;
+    }
+  }
+
+  const trend = alertsThisWeek > alertsLastWeek + 1 ? 'up'
+              : alertsThisWeek < alertsLastWeek - 1 ? 'down'
+              : 'stable';
+
+  res.json({ ok: true, overduePendingCount, upcoming48hCount, alertsRecentCount,
+             alertsThisWeek, alertsLastWeek, trend });
+});
+
+// POST /api/homework/done — mark homework complete + send Telegram confirmation
 app.post('/api/homework/done', async (req, res) => {
-  const { id, homeworkText, studentName } = req.body || {};
+  const {
+    id, homeworkText, studentName,
+    subject: bodySubject, date: bodyDate, lesson: bodyLesson,
+    alertDay, description,
+  } = req.body || {};
   if (!id) return res.status(400).json({ ok: false, error: 'missing id' });
 
-  const status = loadStatus();
-  const now = new Date();
-  const parts = id.split('_');
-  const subject = parts[0] || '?';
-  const date    = parts[1] || '?';
-  const lesson  = parts[2] || '?';
+  const status  = loadStatus();
+  const now     = new Date();
+  const parts   = id.split('_');
+  const subject = bodySubject || parts[0] || '?';
+  const date    = bodyDate    || parts[1] || '?';
+  const lesson  = bodyLesson  || parts[2] || '?';
 
   const timeStr = now.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
   const dateStr = now.toLocaleDateString('he-IL');
@@ -168,31 +485,65 @@ app.post('/api/homework/done', async (req, res) => {
   status[id] = { done: true, markedAt: now.toISOString() };
   saveStatus(status);
 
-  // Mark reminder as sent so we don't re-remind
-  sentReminders.add(id);
+  // Mark both reminder tiers as sent so no future reminder fires for this item
+  sentReminders.add(`${id}_1d`);
+  sentReminders.add(`${id}_3d`);
+  saveSentReminders();
+
+  const descTrimmed = (description || '').trim();
+  const showDesc = descTrimmed && descTrimmed !== (homeworkText || '').trim()
+    ? descTrimmed.slice(0, 250)
+    : null;
 
   const lines = [
     `✅ <b>שיעורי בית הושלמו!</b>`,
-    studentName ? `👦 תלמיד: ${studentName}` : '',
-    `📚 מקצוע: ${subject}`,
-    `📅 תאריך: ${date} | שיעור ${lesson}`,
-    homeworkText ? `📝 תוכן: ${homeworkText}` : '',
+    ``,
+    studentName  ? `👧 תלמידה: <b>${studentName}</b>` : '',
+    `📚 מקצוע: <b>${subject}</b>`,
+    `📅 תאריך: ${date}${lesson ? ` | שיעור ${lesson}` : ''}`,
+    alertDay     ? `🗓 מועד: ${alertDay}` : '',
+    ``,
+    homeworkText ? `📝 מטלה: ${homeworkText}` : '',
+    showDesc     ? `📋 פירוט: ${showDesc}` : '',
+    ``,
     `⏰ סומן: ${timeStr} ${dateStr}`,
-  ].filter(Boolean).join('\n');
+  ].filter(l => l !== null && l !== undefined).join('\n').replace(/\n{3,}/g, '\n\n').trim();
 
   await sendTelegram(lines);
   res.json({ ok: true, id, done: true });
 });
 
-// POST /api/homework/undone — unmark
+// POST /api/homework/undone — unmark (re-enables future reminders)
 app.post('/api/homework/undone', (req, res) => {
   const { id } = req.body || {};
   if (!id) return res.status(400).json({ ok: false, error: 'missing id' });
   const status = loadStatus();
   delete status[id];
   saveStatus(status);
-  sentReminders.delete(id);
+  sentReminders.delete(`${id}_1d`);
+  sentReminders.delete(`${id}_3d`);
+  saveSentReminders();
   res.json({ ok: true, id, done: false });
+});
+
+// POST /api/trigger — phone requests a fresh scrape from home machine
+app.post('/api/trigger', (req, res) => {
+  triggerPending = true;
+  triggerRequestedAt = new Date().toISOString();
+  console.log(`[trigger] Scrape requested at ${triggerRequestedAt}`);
+  res.json({ ok: true, message: 'Trigger queued — home machine will scrape within ~2 minutes' });
+});
+
+// GET /api/poll — home machine daemon polls this; returns flag and resets it
+app.get('/api/poll', (req, res) => {
+  const secret = req.query.secret || req.headers['x-push-secret'];
+  if (secret !== PUSH_SECRET) return res.status(403).json({ ok: false });
+  const pending = triggerPending;
+  if (pending) {
+    triggerPending = false;
+    console.log('[poll] Trigger consumed by home machine');
+  }
+  res.json({ ok: true, pending, requestedAt: triggerRequestedAt });
 });
 
 // Fallback → index.html
@@ -200,7 +551,10 @@ app.get('*', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'index.html'));
 });
 
+// ─── Startup ──────────────────────────────────────────────────────────────────
+loadCacheFromFile();
 app.listen(PORT, () => {
   console.log(`Webtop dashboard running on http://localhost:${PORT}`);
   startDeadlineReminders();
+  startLocalScraper();
 });

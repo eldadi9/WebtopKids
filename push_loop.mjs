@@ -46,7 +46,8 @@ function loadDotEnv() {
 loadDotEnv();
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-const VPS_URL         = (process.env.VPS_URL         || 'http://76.13.8.113:3001').replace(/\/$/, '');
+let VPS_URL = (process.env.VPS_URL || 'http://76.13.8.113:3001').replace(/\/$/, '');
+if (VPS_URL.includes('/api/push')) VPS_URL = VPS_URL.replace(/\/api\/push.*$/, ''); // base URL only
 const PUSH_SECRET     =  process.env.PUSH_SECRET      || 'webtop2026';
 const SCRAPE_INTERVAL = parseInt(process.env.SCRAPE_INTERVAL || '15',  10); // minutes
 const POLL_INTERVAL   = parseInt(process.env.POLL_INTERVAL   || '30',  10); // seconds
