@@ -114,7 +114,13 @@ async function scrapeAndPush(reason = 'scheduled') {
   log(`Scraping… (${reason})`);
   try {
     const data = await runScraper();
-    const notifCount = data?.data?.notifications?.length ?? '?';
+    const links = data?.data?.usefulLinks || [];
+    const isLoginPage = links.some(l => (l.href || '').includes('forgotPassword'));
+    if (isLoginPage) {
+      log(`ERROR — Scrape returned login page. Run WEBTOP_CAPTURE=true node webtop_scrape.mjs to re-login.`);
+      return;
+    }
+    const notifCount = data?.data?.notifications?.length ?? 0;
     log(`Scraper OK — ${notifCount} notifications`);
 
     log(`Pushing to ${VPS_URL}…`);

@@ -442,6 +442,16 @@ body.theme-light .stab:hover { background: rgba(0,0,0,0.06); }
 .card.type-grade             { --card-color: var(--c-grade);       background: var(--c-grade-bg); }
 .card.type-general           { --card-color: var(--c-general);     background: var(--c-general-bg); }
 
+/* Link cards (קישורים) ── */
+a.link-card {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  --card-color: #3b82f6;
+  cursor: pointer;
+}
+a.link-card:hover { opacity: 0.9; }
+
 .card.done-card { opacity: 0.45; }
 .card.done-card:hover { transform: none; }
 
@@ -1086,6 +1096,26 @@ body.theme-light .stab:hover { background: rgba(0,0,0,0.06); }
   color:       #64748b;
   border:      1px solid rgba(100, 116, 139, 0.25);
 }
+.badge-approved {
+  background: rgba(16, 185, 129, 0.15);
+  color:       #34d399;
+  border:      1px solid rgba(16, 185, 129, 0.35);
+}
+.btn-approval-done {
+  margin-top: 0.5rem;
+  padding: 0.4rem 1rem;
+  background: rgba(16, 185, 129, 0.2);
+  border: 1px solid rgba(16, 185, 129, 0.5);
+  color: #34d399;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  width: 100%;
+  transition: background 0.15s;
+}
+.btn-approval-done:hover { background: rgba(16, 185, 129, 0.3); }
 
 /* ═══════════════════════════════════════════════════════════════════
    HOMEWORK HISTORY

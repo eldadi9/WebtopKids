@@ -31,13 +31,21 @@ function fixSpacingForDisplay(str) {
     .replace(/חיסוריום/g, 'חיסור יום')
     .replace(/איחוריום/g, 'איחור יום')
     .replace(/מילהטובה/g, 'מילה טובה')
+    .replace(/מילה\s*טובהיום/g, 'מילה טובה יום')
     .replace(/חוסרציוד/g, 'חוסר ציוד')
+    .replace(/חוסר ציוד לימודיום/g, 'חוסר ציוד לימודי יום')
+    .replace(/אירועישיעור/g, 'אירועי שיעור')
+    .replace(/נושאישיעור/g, 'נושאי שיעור')
     .replace(/לימודיום/g, 'לימודי יום')
     .replace(/שיעוריום/g, 'שיעורי יום')
     .replace(/ביתיום/g, 'ביית יום')
-    .replace(/חוסר ציוד לימודיום/g, 'חוסר ציוד לימודי יום')
-    .replace(/אירועישיעור/g, 'אירועי שיעור')
-    .replace(/נושאישיעור/g, 'נושאי שיעור');
+    .replace(/תפריטראשי/g, 'תפריט ראשי')
+    .replace(/ריכוזמידע/g, 'ריכוז מידע')
+    .replace(/תיבתהודעות/g, 'תיבת הודעות')
+    .replace(/כרטיסנתלמיד/g, 'כרטיס תלמיד')
+    .replace(/חתימותואישורים/g, 'חתימות ואישורים')
+    .replace(/מ\.?\s*שעותושינויים/g, 'מ. שעות ושינויים')
+    .replace(/ספרטלפונים/g, 'ספר טלפונים');
 }
 
 /* ─── Type labels & icons ──────────────────────────────────────────────── */
@@ -66,7 +74,7 @@ async function fetchAll(forceRefresh = false) {
       fetch('/api/insights'),
       fetch('/api/external-links'),
     ]);
-    const dataRes   = results[0].status === 'fulfilled' ? results[0].value : null;
+    const dataRes = results[0].status === 'fulfilled' ? results[0].value : null;
     const statusRes = results[1].status === 'fulfilled' ? results[1].value : null;
     const eventsRes = results[2].status === 'fulfilled' ? results[2].value : null;
     const childrenRes = results[3].status === 'fulfilled' ? results[3].value : null;
@@ -142,7 +150,9 @@ function render(data, status) {
   }
 
   const notifications = d.notifications || [];
-  const classEvents   = getClassEventsForStudent(d, currentStudent);
+  const classEvents   = (d.classEventsByStudent && currentStudent && d.classEventsByStudent[currentStudent])
+                        ? d.classEventsByStudent[currentStudent]
+                        : (d.classEvents || []);
 
   updateStudentSwitcher(notifications);
   renderStats(notifications, classEvents);
@@ -155,25 +165,37 @@ function rerender() {
   if (!lastData?.ok) return;
   const d             = lastData.data || {};
   const notifications = d.notifications || [];
-  const classEvents   = getClassEventsForStudent(d, currentStudent);
+  const classEvents   = (d.classEventsByStudent && currentStudent && d.classEventsByStudent[currentStudent])
+                        ? d.classEventsByStudent[currentStudent]
+                        : (d.classEvents || []);
 
   // Reset card store every full re-render
   _cardStore = {};
   _cardIdx   = 0;
 
   const visible = currentStudent
-    ? notifications.filter(n => studentMatches(n.student, currentStudent))
+    ? notifications.filter(n => n.student === currentStudent)
     : notifications;
 
   renderHomework(visible, lastStatus);
   renderAlerts(visible);
   renderGrades(visible);
   renderClassEvents(classEvents);
-  renderCalendar(visible, classEvents, lastEvents);
+  (() => {
+    const schoolEvents = lastData?.data?.schoolEvents || [];
+    const mergedEvents = [...lastEvents];
+    const today = new Date();
+    const todayStr = `${String(today.getDate()).padStart(2,'0')}/${String(today.getMonth()+1).padStart(2,'0')}/${today.getFullYear()}`;
+    for (const se of schoolEvents) {
+      mergedEvents.push({ name: se.name, type: se.type || 'event', date: todayStr, details: se.details || '', emoji: '🏫' });
+    }
+    renderCalendar(visible, classEvents, mergedEvents);
+  })();
   renderApprovals();
   renderMessages();
-  renderFeed(visible);
+  renderLinks();
   renderExternalLinks();
+  renderFeed(visible);
   updateTabCounts(visible, classEvents);
 }
 
@@ -200,8 +222,15 @@ function updateTabCounts(notifications, classEvents) {
     ev.type === 'event' || /אישור/.test(ev.details || '')
   ).filter(ev => !ev.childName || !currentStudent || ev.childName === currentStudent).length
     + notifications.filter(n => n.type === 'approval').length + pendingScraped;
+
+  setTab('tab-homework',  '📚', 'שיעורי בית', hw);
+  setTab('tab-alerts',    '⚠️', 'התראות',      alerts);
+  setTab('tab-grades',    '🏅', 'ציונים',      grades);
+  setTab('tab-calendar',  '📅', 'יומן',        calItems);
   setTab('tab-approvals', '✍️', 'אישורים',     approvals);
   setTab('tab-messages',  '📨', 'הודעות',      msgs);
+  const linksCount = (lastData?.data?.usefulLinks || []).length;
+  setTab('tab-links',     '🔗', 'קישורים',     linksCount);
   setTab('tab-external',  '🔗', 'אתרים חיצוניים', lastExternalLinks.length);
 }
 
@@ -518,29 +547,18 @@ function renderHomework(notifications, status) {
   let html = '';
 
   if (!pending.length) {
+    // All done — celebrate
     html += '<div class="empty" data-icon="🎉">כל שיעורי הבית הושלמו!</div>';
   } else {
-    html += '<h3 class="group-title">📚 שיעורי בית פעילים</h3>';
     html += pending.map(n => hwCard(n, homeworkId(n), false)).join('');
   }
 
-  // Completed section — always show when there are completed items
+  // History button — shown whenever there are completed items
   if (done.length) {
-    html += '<h3 class="group-title">✅ הושלמו</h3>';
-    const showCount = Math.min(5, done.length);
-    const toShow = done.slice(0, showCount);
-    html += toShow.map(n => hwCard(n, homeworkId(n), true)).join('');
-    if (done.length > showCount) {
-      html += `
-        <button class="btn-hw-history" onclick="openHomeworkHistory()">
-          📋 הצג את כל ${done.length} שיעורי בית שהושלמו
-        </button>`;
-    } else if (done.length > 0) {
-      html += `
-        <button class="btn-hw-history" onclick="openHomeworkHistory()">
-          📋 היסטוריה מלאה
-        </button>`;
-    }
+    html += `
+      <button class="btn-hw-history" onclick="openHomeworkHistory()">
+        📋 היסטוריה — ${done.length} שיעורי בית הושלמו
+      </button>`;
   }
 
   container.innerHTML = html;
@@ -628,13 +646,13 @@ function renderAlerts(notifications) {
 function alertCard(n) {
   const idx   = allocCard(n);
   const label = TYPE_LABEL[n.type] || TYPE_LABEL.general;
-  const meta  = [
+  const meta  = fixSpacingForDisplay([
     n.alertDay || n.date,
     n.lesson   ? `שיעור ${n.lesson}` : null,
     n.student  ? `👤 ${n.student}`  : null,
-  ].filter(Boolean).join(' | ');
+  ].filter(Boolean).join(' | '));
   const preview = n.description
-    ? n.description.slice(0, 100) + (n.description.length > 100 ? '...' : '')
+    ? fixSpacingForDisplay(n.description).slice(0, 100) + (n.description.length > 100 ? '...' : '')
     : '';
 
   return `
@@ -644,8 +662,8 @@ function alertCard(n) {
         <span class="card-title">${esc(n.subject || '?')}</span>
         <span class="badge badge-${n.type || 'general'}">${label}</span>
       </div>
-      <div class="card-meta">${esc(meta)}</div>
-      ${preview ? `<div class="card-desc">${esc(preview)}</div>` : ''}
+        <div class="card-meta">${esc(meta)}</div>
+        ${preview ? `<div class="card-desc">${esc(preview)}</div>` : ''}
       <div class="card-expand-hint">לחץ לפרטים נוספים ›</div>
     </div>`;
 }
@@ -666,11 +684,11 @@ function renderGrades(notifications) {
 
   container.innerHTML = items.map(n => {
     const idx   = allocCard(n);
-    const meta  = [
+    const meta  = fixSpacingForDisplay([
       n.alertDay || n.date,
       n.lesson   ? `שיעור ${n.lesson}` : null,
       n.student  ? `👤 ${n.student}`   : null,
-    ].filter(Boolean).join(' | ');
+    ].filter(Boolean).join(' | '));
 
     // Extract grade number from description (e.g. "ציון 95 במבחן")
     const gradeMatch = (n.description || '').match(/ציון\s+(\d+)/);
@@ -688,7 +706,7 @@ function renderGrades(notifications) {
           <span class="badge badge-grade">🏅 ציון</span>
         </div>
         <div class="card-meta">${esc(meta)}</div>
-        ${n.description ? `<div class="hw-text">${esc(n.description)}</div>` : ''}
+        ${n.description ? `<div class="hw-text">${esc(fixSpacingForDisplay(n.description))}</div>` : ''}
         <div class="card-expand-hint">לחץ לפרטים נוספים ›</div>
       </div>`;
   }).join('');
@@ -781,7 +799,7 @@ function renderCalendar(notifications, classEvents, specialEvents) {
   for (const ev of specialEvents) {
     if (!ev.date) continue;
     // Filter by childName if the event belongs to a specific child
-    if (ev.childName && currentStudent && !studentMatches(ev.childName, currentStudent)) continue;
+    if (ev.childName && currentStudent && ev.childName !== currentStudent) continue;
     // Filter by grade if event name or details mention a specific class grade
     if (!isEventValidForCurrentChild((ev.name || '') + ' ' + (ev.details || ''))) continue;
     // Accept "DD/MM" (recurring) or "DD/MM/YYYY" (one-time)
@@ -864,14 +882,11 @@ function renderCalendar(notifications, classEvents, specialEvents) {
         ? `<div class="card-teacher">👤 ${esc(item.teacher)}${item.lesson ? ` · שיעור ${esc(item.lesson)}` : ''}</div>`
         : (item.lesson ? `<div class="card-teacher">שיעור ${esc(item.lesson)}</div>` : '');
 
-      const labelDisp = fixSpacingForDisplay(item.label);
-      const subDisp   = item.sub ? fixSpacingForDisplay(item.sub) : '';
-
       html += `
         <div class="card ${typeClass} clickable-card cal-item"
              data-card-idx="${idx}" data-hw-id="${hwIdVal}">
-          <div class="card-title">${specialBadge}${esc(labelDisp)}</div>
-          ${subDisp ? `<div class="card-desc">${esc(subDisp)}</div>` : ''}
+          <div class="card-title">${specialBadge}${esc(item.label)}</div>
+          ${item.sub ? `<div class="card-desc">${esc(item.sub)}</div>` : ''}
           ${teacherRow}
         </div>`;
     }
@@ -893,7 +908,7 @@ function renderApprovals() {
   // 1. Special events that need parent approval (type "event" or "נדרש אישור" in details)
   for (const ev of lastEvents) {
     if (!ev.date) continue;
-    if (ev.childName && currentStudent && !studentMatches(ev.childName, currentStudent)) continue;
+    if (ev.childName && currentStudent && ev.childName !== currentStudent) continue;
     if (ev.type === 'event' || /אישור/.test(ev.details || '')) {
       approvalItems.push({
         label: `${ev.emoji || '📋'} ${ev.name}`,
@@ -904,28 +919,21 @@ function renderApprovals() {
     }
   }
 
-  // 2. Any approval-type notifications from the scraper
+  // 2. Signoffs from scraper (חתימות ואישורים)
+  for (const s of (lastData?.data?.signoffs || [])) {
+    const txt = (s.details || '').trim();
+    if (txt.length > 15) approvalItems.push({ label: fixSpacingForDisplay(txt).slice(0, 60), sub: txt, date: '', type: 'signoff' });
+  }
+
+  // 3. Any approval-type notifications from the scraper
   for (const n of notifications) {
     if (n.type !== 'approval') continue;
-    if (currentStudent && n.student && !studentMatches(n.student, currentStudent)) continue;
+    if (currentStudent && n.student && n.student !== currentStudent) continue;
     approvalItems.push({
       label: n.subject || 'אישור',
       sub:   n.homeworkText || n.description || '',
       date:  n.date || '',
       type:  'approval',
-    });
-  }
-
-  // 3. Dedicated approvals from חתימות ואישורים page (scraper) — exclude acknowledged
-  const scrapedApprovals = lastData?.data?.approvals || [];
-  for (const a of scrapedApprovals) {
-    if (lastStatus[approvalId(a)]?.acknowledged) continue;
-    approvalItems.push({
-      label:  a.label || 'אישור נדרש',
-      sub:    a.full && a.full !== a.label ? a.full : '',
-      date:   '',
-      type:   'scraped',
-      id:     approvalId(a),
     });
   }
 
@@ -941,58 +949,22 @@ function renderApprovals() {
     return;
   }
 
-  const webtopApprovalsUrl = 'https://webtop.smartschool.co.il/approvals';
   container.innerHTML = approvalItems.map(item => {
-    const aid = (item.id || '').replace(/'/g, "\\'");
-    const onClick = aid
-      ? `handleApprovalClick('${aid}', '${webtopApprovalsUrl}')`
-      : `window.open('${webtopApprovalsUrl}', '_blank')`;
+    const id = approvalId(item);
+    const approved = lastStatus[id]?.approved;
     return `
-    <div class="card type-general approval-card" onclick="${onClick}" style="cursor:pointer;" data-approval-id="${esc(aid)}">
+    <div class="card type-general${approved ? ' approved-card' : ''}" data-approval-id="${esc(id)}">
       <div class="card-header">
         <span class="card-title">${esc(item.label)}</span>
-        <span class="badge badge-general">✍️ אישור</span>
+        ${approved
+          ? '<span class="badge badge-approved">✓ אושר</span>'
+          : '<span class="badge badge-general">✍️ אישור</span>'}
       </div>
       ${item.date ? `<div class="card-meta">📅 ${esc(item.date)}</div>` : ''}
       ${item.sub  ? `<div class="card-desc">${esc(item.sub)}</div>`  : ''}
-      <div class="card-meta" style="margin-top:0.5rem; font-size:0.75rem; color:#94a3b8;">לחץ לפתיחה באתר — חתימה ›</div>
+      ${!approved ? `<button class="btn-approval-done" data-approval-id="${esc(id)}">✓ אישרתי</button>` : ''}
     </div>`;
   }).join('');
-}
-
-async function handleApprovalClick(approvalId, url) {
-  if (approvalId) {
-    try {
-      await fetch('/api/approvals/acknowledged', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: approvalId }),
-      });
-    } catch (e) { console.warn('handleApprovalClick:', e); }
-    rerender();
-  }
-  window.open(url || 'https://webtop.smartschool.co.il/approvals', '_blank');
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   SECTION: אתרים חיצוניים — External links, forms
-   ═══════════════════════════════════════════════════════════════ */
-function renderExternalLinks() {
-  const container = document.getElementById('external-list');
-  if (!container) return;
-
-  const links = lastExternalLinks || [];
-  if (!links.length) {
-    container.innerHTML = '<div class="empty" data-icon="🔗">אין קישורים חיצוניים</div>';
-    return;
-  }
-
-  container.innerHTML = links.map(l => `
-    <a href="${esc(l.url || '#')}" target="_blank" rel="noopener" class="card type-general" style="display:block; text-decoration:none; color:inherit;">
-      <div class="card-header">
-        <span class="card-title">${l.icon || '🔗'} ${esc(l.title || 'קישור')}</span>
-      </div>
-      <div class="card-meta" style="font-size:0.75rem; color:#94a3b8;">${esc((l.url || '').replace(/^https?:\/\//, '').slice(0, 50))}</div>
-    </a>`).join('');
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1023,22 +995,11 @@ function renderMessages() {
   }
 
   // Filter by currentStudent if set
-  let filtered = currentStudent
-    ? messages.filter(m => !m.student || studentMatches(m.student, currentStudent))
+  const filtered = currentStudent
+    ? messages.filter(m => !m.student || m.student === currentStudent)
     : messages;
 
-  // Client-side deduplication (safety net if scraper still produces dupes)
-  const seen = new Map();
-  filtered = filtered.filter(m => {
-    const k = msgId(m);
-    if (seen.has(k)) return false;
-    seen.set(k, true);
-    return true;
-  });
-
   const isRead = (m) => m.read || lastStatus[msgId(m)]?.read;
-
-  // Sort: unread first, then most-recent first
   const sorted = [...filtered].sort((a, b) => {
     if (!!isRead(a) !== !!isRead(b)) return isRead(a) ? 1 : -1;
     return dateSortKey(b.date) - dateSortKey(a.date);
@@ -1101,6 +1062,58 @@ function msgCard(m) {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   SECTION: קישורים שימושיים
+   ═══════════════════════════════════════════════════════════════ */
+function renderLinks() {
+  const container = document.getElementById('links-list');
+  if (!container) return;
+
+  const links = lastData?.data?.usefulLinks || [];
+  if (!links.length) {
+    container.innerHTML = '<div class="empty" data-icon="🔗">אין קישורים להצגה</div>';
+    return;
+  }
+
+  const BASE = 'https://webtop.smartschool.co.il';
+  container.innerHTML = links.map(l => {
+    const href = l.href && !l.href.startsWith('http') ? BASE + (l.href.startsWith('/') ? l.href : '/' + l.href) : (l.href || '');
+    let txt = fixSpacingForDisplay(l.text || '');
+    if (/\s*https?:\/\/\S+/.test(txt)) txt = txt.replace(/\s*https?:\/\/\S+/g, '').trim(); // הסרת URL מתוך הטקסט
+    if (!txt || txt.length < 2) return '';
+    return `
+      <a class="card type-general link-card" href="${esc(href)}" target="_blank" rel="noopener">
+        <span class="card-title">🔗 ${esc(txt)}</span>
+        <span class="card-expand-hint">פתח באתר ›</span>
+      </a>`;
+  }).filter(Boolean).join('');
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SECTION: אתרים חיצוניים (קישורים מ-external_links.json)
+   ═══════════════════════════════════════════════════════════════ */
+function renderExternalLinks() {
+  const container = document.getElementById('external-list');
+  if (!container) return;
+
+  const links = lastExternalLinks || [];
+  if (!links.length) {
+    container.innerHTML = '<div class="empty" data-icon="🔗">אין אתרים חיצוניים</div>';
+    return;
+  }
+
+  container.innerHTML = links.map(l => {
+    const url = l.url || l.href || '#';
+    const title = l.title || l.text || 'קישור';
+    const icon = l.icon || '🔗';
+    return `
+      <a class="card type-general link-card" href="${esc(url)}" target="_blank" rel="noopener">
+        <span class="card-title">${icon} ${esc(title)}</span>
+        <span class="card-expand-hint">פתח באתר ›</span>
+      </a>`;
+  }).join('');
+}
+
+/* ═══════════════════════════════════════════════════════════════
    SECTION: הכל (פיד מלא — ללא סינון)
    ═══════════════════════════════════════════════════════════════ */
 function renderFeed(notifications) {
@@ -1145,11 +1158,11 @@ function renderFeed(notifications) {
 /* ═══════════════════════════════════════════════════════════════
    MODAL — פרטים מלאים בלחיצה על כרטיס
    ═══════════════════════════════════════════════════════════════ */
-function openCardDetail(n, hwId, msgIdParam) {
+function openCardDetail(n, hwId, msgId) {
   const modal   = document.getElementById('detail-modal');
   const content = document.getElementById('modal-content');
   if (!modal || !content || !n) return;
-  const mid = msgIdParam || (n.type === 'message' && n._msgRaw ? msgId(n._msgRaw) : '');
+  const mid = msgId || (n.type === 'message' && n._msgRaw ? msgId(n._msgRaw) : '');
   if (n.type === 'message' && mid) markMessageRead(mid);
 
   const label   = TYPE_LABEL[n.type] || TYPE_LABEL.general;
@@ -1160,7 +1173,7 @@ function openCardDetail(n, hwId, msgIdParam) {
   const rows = [];
   if (n.student)  rows.push(['👤 תלמיד/ה', esc(n.student)]);
   if (n.subject)  rows.push([isMsg ? '📌 נושא'    : '📖 מקצוע',   esc(n.subject)]);
-  if (n.alertDay) rows.push([isMsg ? '✉️ שולח/ת'  : '📅 יום',      esc(n.alertDay)]);
+  if (n.alertDay) rows.push([isMsg ? '✉️ שולח/ת'  : '📅 יום',      esc(fixSpacingForDisplay(n.alertDay))]);
   // For messages: alertDay = sender, so show date separately
   if (isMsg && n.date)            rows.push(['📅 תאריך', esc(n.date)]);
   // For non-messages: show date only when alertDay is absent
@@ -1182,7 +1195,7 @@ function openCardDetail(n, hwId, msgIdParam) {
   const descSection = (n.description && n.description !== n.homeworkText) ? `
     <div class="modal-box modal-box-desc">
       <div class="modal-box-label">${isMsg ? '📨 תוכן ההודעה' : '📋 תיאור מלא מהמערכת'}</div>
-      <div class="modal-box-text">${esc(n.description)}</div>
+      <div class="modal-box-text">${esc(fixSpacingForDisplay(n.description))}</div>
     </div>` : '';
 
   const doneBtn = n.type === 'homework' && hwId && !done ? `
@@ -1227,7 +1240,7 @@ function closeModal() {
 /* ─── Homework history modal ────────────────────────────────────────────── */
 function openHomeworkHistory() {
   const all     = (lastData?.data?.notifications || []).filter(n => n.type === 'homework' && n.date);
-  const visible = currentStudent ? all.filter(n => studentMatches(n.student, currentStudent)) : all;
+  const visible = currentStudent ? all.filter(n => n.student === currentStudent) : all;
   const done    = visible
     .filter(n => lastStatus[homeworkId(n)]?.done)
     .sort((a, b) => {
@@ -1284,7 +1297,13 @@ function openHomeworkHistory() {
 
 /* ─── Event delegation: card click → open modal ────────────────────────── */
 document.addEventListener('click', e => {
-  // Skip buttons and UI controls
+  // Approval button
+  const approvBtn = e.target.closest('.btn-approval-done');
+  if (approvBtn) {
+    const id = approvBtn.dataset.approvalId;
+    if (id) markApprovalDone(id);
+    return;
+  }
   if (e.target.closest('.btn-done, .modal-close, .child-select, #btn-refresh, .btn-retry, .btn-hw-history')) return;
 
   // Close modal when clicking backdrop
@@ -1295,8 +1314,8 @@ document.addEventListener('click', e => {
   if (!card) return;
   const n    = _cardStore[+card.dataset.cardIdx];
   const hwId = card.dataset.hwId || '';
-  const msgIdVal = card.dataset.msgId || '';
-  if (n) openCardDetail(n, hwId, msgIdVal);
+  const msgId = card.dataset.msgId || '';
+  if (n) openCardDetail(n, hwId, msgId);
 });
 
 // Close modal on Escape
@@ -1328,6 +1347,20 @@ async function markMessageRead(id) {
       rerender();
     }
   } catch (e) { console.warn('markMessageRead:', e); }
+}
+
+async function markApprovalDone(id) {
+  try {
+    const res = await fetch('/api/approval/done', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const j = await res.json();
+    if (j.ok) {
+      lastStatus[id] = { approved: true };
+      rerender();
+    }
+  } catch (e) { console.warn('markApprovalDone:', e); }
 }
 
 async function markDone(id, homeworkText, studentName, btn, extra = {}) {
@@ -1596,27 +1629,16 @@ function esc(str) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
-function approvalId(a) {
-  return 'approval_' + (a?.label || a?.full || '').replace(/\s+/g, '_').slice(0, 50);
-}
 function homeworkId(n) {
   return `${n.subject || ''}_${n.date || ''}_${n.lesson || ''}`;
-}
-function studentMatches(stored, selected) {
-  if (!stored || !selected) return !stored && !selected;
-  if (stored === selected) return true;
-  return stored.includes(selected) || selected.includes(stored);
-}
-function getClassEventsForStudent(d, currentStudent) {
-  const byStudent = d?.classEventsByStudent;
-  if (!byStudent || !currentStudent) return d?.classEvents || [];
-  if (byStudent[currentStudent]) return byStudent[currentStudent];
-  const key = Object.keys(byStudent).find(k => studentMatches(k, currentStudent));
-  return key ? byStudent[key] : [];
 }
 function msgId(m) {
   const s = `${m.from || ''}|${m.date || ''}|${(m.subject || '').slice(0, 50)}`;
   return 'msg_' + s.replace(/[^a-zA-Z0-9\u0590-\u05FF|_\-\/\.]/g, '_');
+}
+function approvalId(item) {
+  const s = `${item.label || ''}|${item.sub || ''}|${item.date || ''}`;
+  return 'approval_' + s.replace(/[^a-zA-Z0-9\u0590-\u05FF|_\-\/\.]/g, '_').slice(0, 80);
 }
 function dateSortKey(dateStr) {
   if (!dateStr) return 0;
@@ -1652,8 +1674,8 @@ function initTheme() {
   if (btn) btn.addEventListener('click', toggleTheme);
 }
 
-/* ─── Auto-refresh every 15 min + init ─────────────────────────────────── */
-setInterval(fetchAll, 15 * 60 * 1000);
+/* ─── Auto-refresh every 5 min + init ─────────────────────────────────── */
+setInterval(fetchAll, 5 * 60 * 1000);
 initTheme();
 initPhotoUpload();
 fetchAll();

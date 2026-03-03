@@ -18,7 +18,7 @@ data_cache.json
 sent_reminders.json
 push_scrape.log
 daemon.log
-nul
+discovery.json
 
 # Python
 __pycache__/
