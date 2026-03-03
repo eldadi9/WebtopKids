@@ -217,7 +217,7 @@ function updateTabCounts(notifications, classEvents) {
   };
   const msgs = (lastData?.data?.messages || []).filter(m => !m.read).length;
   const scrapedApprovals = lastData?.data?.approvals || [];
-  const pendingScraped = scrapedApprovals.filter(a => !lastStatus[approvalId(a)]?.acknowledged).length;
+  const pendingScraped = scrapedApprovals.filter(a => !lastStatus[approvalId(a)]?.approved).length;
   const approvals = lastEvents.filter(ev =>
     ev.type === 'event' || /אישור/.test(ev.details || '')
   ).filter(ev => !ev.childName || !currentStudent || ev.childName === currentStudent).length
@@ -903,37 +903,62 @@ function renderApprovals() {
   if (!container) return;
 
   const notifications = lastData?.data?.notifications || [];
+  const scrapedApprovals = lastData?.data?.approvals || [];
+  const signoffs = lastData?.data?.signoffs || [];
   const approvalItems = [];
 
-  // 1. Special events that need parent approval (type "event" or "נדרש אישור" in details)
-  for (const ev of lastEvents) {
-    if (!ev.date) continue;
-    if (ev.childName && currentStudent && ev.childName !== currentStudent) continue;
-    if (ev.type === 'event' || /אישור/.test(ev.details || '')) {
+  // 1. Structured approvals from scraper (msgId, title, sender, date, status, requiredEquipment)
+  for (const a of scrapedApprovals) {
+    const approved = a.status === 'approved' || lastStatus[approvalId(a)]?.approved;
+    approvalItems.push({
+      ...a,
+      label: a.title || a.label || a.details || '',
+      sub: a.itinerary || a.body || '',
+      date: a.date,
+      type: 'scraped',
+      approved,
+      requiredEquipment: a.requiredEquipment || [],
+      url: a.url,
+    });
+  }
+
+  // 2. Fallback: signoffs (legacy format)
+  for (const s of signoffs) {
+    if (approvalItems.some(x => (x.details || x.sub) === (s.details || ''))) continue;
+    const txt = (s.details || '').trim();
+    if (txt.length > 15) {
+      const id = approvalId({ msgId: s.msgId, label: txt, sub: txt, date: s.date });
       approvalItems.push({
-        label: `${ev.emoji || '📋'} ${ev.name}`,
-        sub:   ev.details || '',
-        date:  ev.date,
-        type:  'event',
+        label: fixSpacingForDisplay(txt).slice(0, 60), sub: txt, date: s.date || '', type: 'signoff',
+        approved: lastStatus[id]?.approved, requiredEquipment: [], url: s.url,
       });
     }
   }
 
-  // 2. Signoffs from scraper (חתימות ואישורים)
-  for (const s of (lastData?.data?.signoffs || [])) {
-    const txt = (s.details || '').trim();
-    if (txt.length > 15) approvalItems.push({ label: fixSpacingForDisplay(txt).slice(0, 60), sub: txt, date: '', type: 'signoff' });
+  // 3. Special events (type event or נדרש אישור)
+  for (const ev of lastEvents) {
+    if (!ev.date) continue;
+    if (ev.childName && currentStudent && ev.childName !== currentStudent) continue;
+    if (ev.type === 'event' || /אישור/.test(ev.details || '')) {
+      const id = approvalId({ label: ev.name, sub: ev.details, date: ev.date });
+      approvalItems.push({
+        label: `${ev.emoji || '📋'} ${ev.name}`, sub: ev.details || '', date: ev.date, type: 'event',
+        approved: lastStatus[id]?.approved, requiredEquipment: [],
+      });
+    }
   }
 
-  // 3. Any approval-type notifications from the scraper
+  // 4. Approval-type notifications
   for (const n of notifications) {
     if (n.type !== 'approval') continue;
     if (currentStudent && n.student && n.student !== currentStudent) continue;
     approvalItems.push({
       label: n.subject || 'אישור',
-      sub:   n.homeworkText || n.description || '',
-      date:  n.date || '',
-      type:  'approval',
+      sub: n.homeworkText || n.description || '',
+      date: n.date || '',
+      type: 'approval',
+      approved: lastStatus[approvalId({ label: n.subject, sub: n.description, date: n.date })]?.approved,
+      requiredEquipment: [],
     });
   }
 
@@ -951,20 +976,40 @@ function renderApprovals() {
 
   container.innerHTML = approvalItems.map(item => {
     const id = approvalId(item);
-    const approved = lastStatus[id]?.approved;
+    const approved = item.approved || lastStatus[id]?.approved;
+    const statusBadge = approved
+      ? '<span class="badge badge-approved">✓ אושר</span>'
+      : (item.status === 'rejected' ? '<span class="badge badge-rejected">נדחה</span>' : '<span class="badge badge-general">✍️ ממתין לאישור</span>');
+    const eq = Array.isArray(item.requiredEquipment) ? item.requiredEquipment : [];
+    const eqHtml = eq.length ? `<div class="approval-equipment"><strong>ציוד נדרש:</strong> ${eq.map(e => esc(e)).join(' • ')}</div>` : '';
+
     return `
-    <div class="card type-general${approved ? ' approved-card' : ''}" data-approval-id="${esc(id)}">
-      <div class="card-header">
+    <div class="card type-general approval-card${approved ? ' approved-card' : ''}" data-approval-id="${esc(id)}" data-approval-url="${item.url ? esc(item.url) : ''}">
+      <div class="card-header approval-header">
+        <label class="approval-checkbox-wrap">
+          <input type="checkbox" class="approval-checkbox" ${approved ? 'checked' : ''} data-approval-id="${esc(id)}" data-approval-url="${item.url ? esc(item.url) : ''}" ${approved ? 'disabled' : ''} />
+          <span class="checkmark"></span>
+        </label>
         <span class="card-title">${esc(item.label)}</span>
-        ${approved
-          ? '<span class="badge badge-approved">✓ אושר</span>'
-          : '<span class="badge badge-general">✍️ אישור</span>'}
+        ${statusBadge}
       </div>
+      ${item.sender ? `<div class="card-meta">✉️ מאת: ${esc(item.sender)}</div>` : ''}
       ${item.date ? `<div class="card-meta">📅 ${esc(item.date)}</div>` : ''}
-      ${item.sub  ? `<div class="card-desc">${esc(item.sub)}</div>`  : ''}
-      ${!approved ? `<button class="btn-approval-done" data-approval-id="${esc(id)}">✓ אישרתי</button>` : ''}
+      ${item.sub ? `<div class="card-desc">${esc(item.sub)}</div>` : ''}
+      ${eqHtml}
+      <div class="approval-actions">
+        ${item.url ? `<a class="btn-open-webtop" href="${esc(item.url)}" target="_blank" rel="noopener">פתח באתר Webtop</a>` : ''}
+        ${!approved ? `<button class="btn-approval-done" data-approval-id="${esc(id)}" data-approval-url="${item.url ? esc(item.url) : ''}">✓ אישרתי</button>` : ''}
+      </div>
     </div>`;
   }).join('');
+
+  container.querySelectorAll('.approval-checkbox:not([disabled])').forEach(cb => {
+    cb.onclick = (e) => { e.stopPropagation(); markApprovalDone(cb.dataset.approvalId, cb.dataset.approvalUrl); };
+  });
+  container.querySelectorAll('.btn-approval-done').forEach(btn => {
+    btn.onclick = () => markApprovalDone(btn.dataset.approvalId, btn.dataset.approvalUrl);
+  });
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1301,7 +1346,8 @@ document.addEventListener('click', e => {
   const approvBtn = e.target.closest('.btn-approval-done');
   if (approvBtn) {
     const id = approvBtn.dataset.approvalId;
-    if (id) markApprovalDone(id);
+    const url = approvBtn.dataset.approvalUrl;
+    if (id) markApprovalDone(id, url);
     return;
   }
   if (e.target.closest('.btn-done, .modal-close, .child-select, #btn-refresh, .btn-retry, .btn-hw-history')) return;
@@ -1349,7 +1395,7 @@ async function markMessageRead(id) {
   } catch (e) { console.warn('markMessageRead:', e); }
 }
 
-async function markApprovalDone(id) {
+async function markApprovalDone(id, webtopUrl) {
   try {
     const res = await fetch('/api/approval/done', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1359,6 +1405,10 @@ async function markApprovalDone(id) {
     if (j.ok) {
       lastStatus[id] = { approved: true };
       rerender();
+      // פתיחת דף האישור ב-Webtop — המשתמש יוכל לאשר שם והוא יישמר באתר
+      if (webtopUrl && webtopUrl.startsWith('http')) {
+        window.open(webtopUrl, '_blank', 'noopener');
+      }
     }
   } catch (e) { console.warn('markApprovalDone:', e); }
 }
@@ -1637,6 +1687,7 @@ function msgId(m) {
   return 'msg_' + s.replace(/[^a-zA-Z0-9\u0590-\u05FF|_\-\/\.]/g, '_');
 }
 function approvalId(item) {
+  if (item.msgId) return 'approval_' + String(item.msgId).replace(/[^a-zA-Z0-9\-_=]/g, '_').slice(0, 100);
   const s = `${item.label || ''}|${item.sub || ''}|${item.date || ''}`;
   return 'approval_' + s.replace(/[^a-zA-Z0-9\u0590-\u05FF|_\-\/\.]/g, '_').slice(0, 80);
 }

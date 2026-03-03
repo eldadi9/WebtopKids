@@ -489,28 +489,118 @@ async function extractExternalSitesLinks(page) {
   return links;
 }
 
-// ── Signoffs (חתימות ואישורים) ────────────────────────────────────────────
+// ── Signoffs (חתימות ואישורים) — full structured data from signMessaes ────
 async function extractSignoffs(page) {
   const signoffs = [];
+  const approvals = [];  // structured: msgId, url, title, sender, date, status, itinerary, requiredEquipment
   try {
     await page.goto(`${BASE_URL}/signMessaes`, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
-    await sleep(1000);
-    const items = await page.evaluate(() => {
-      const rows = document.querySelectorAll("tr, [class*='row'], mat-row, [class*='item']");
-      const found = [];
-      for (const r of rows) {
-        const text = r.textContent.trim().replace(/\s+/g, " ");
-        if (text.length > 30 && /אישור|חתימה|טיול|יציאה/.test(text)) found.push(text);
+    await sleep(1500);
+
+    // 1. Extract list items with msgId links (right panel)
+    const listItems = await page.evaluate(() => {
+      const out = [];
+      for (const a of document.querySelectorAll("a[href*='msgId'], a[href*='signMessaes']")) {
+        const href = a.getAttribute("href") || "";
+        const m = href.match(/msgId=([^&]+)/);
+        const msgId = m ? decodeURIComponent(m[1]) : null;
+        if (!msgId) continue;
+        const fullUrl = href.startsWith("http") ? href : (href.startsWith("/") ? "https://webtop.smartschool.co.il" + href : "https://webtop.smartschool.co.il/signMessaes?" + href.split("?")[1]);
+        const row = a.closest("tr, [class*='row'], mat-row, .mat-mdc-row, [class*='item'], li");
+        const container = row || a.parentElement;
+        const text = (container?.textContent || a.textContent || "").trim().replace(/\s+/g, " ");
+        // status: אד=approved (green), שמ=rejected (red) — look for button or badge
+        let status = "pending";
+        const statusEl = container?.querySelector("[class*='approve'], [class*='reject'], .mat-mdc-button, button, [class*='badge']");
+        const statusText = (statusEl?.textContent || "").trim();
+        if (/אד|אושר|approved/i.test(statusText)) status = "approved";
+        else if (/שמ|נדחה|rejected/i.test(statusText)) status = "rejected";
+        // Also check for green/red by class or aria
+        if (status === "pending" && container) {
+          const html = container.innerHTML || "";
+          if (/background.*green|color.*green|\.approved|אושר/.test(html)) status = "approved";
+          if (/background.*red|color.*red|\.rejected|נדחה/.test(html)) status = "rejected";
+        }
+        out.push({ msgId, url: fullUrl, raw: text, status });
       }
-      return found;
+      return out;
     });
-    for (const t of items) {
-      if (t && t.length > 30 && !/בחר\/י הודעה|אפשרויות|סינון/.test(t)) signoffs.push({ details: t });
+
+    // Fallback: if no msgId links, extract from rows (legacy)
+    if (listItems.length === 0) {
+      const rows = await page.evaluate(() => {
+        const items = [];
+        const nodes = document.querySelectorAll("tr, [class*='row'], mat-row, [class*='item']");
+        for (const r of nodes) {
+          const text = r.textContent.trim().replace(/\s+/g, " ");
+          if (text.length > 30 && /אישור|חתימה|טיול|יציאה/.test(text)) items.push(text);
+        }
+        return items;
+      });
+      for (const t of rows) {
+        if (t && t.length > 30 && !/בחר\/י הודעה|אפשרויות|סינון/.test(t)) {
+          signoffs.push({ details: t });
+          approvals.push({ label: t.slice(0, 80), details: t, title: t.slice(0, 60), status: "pending", requiredEquipment: [] });
+        }
+      }
+      return { signoffs, approvals };
+    }
+
+    const seenMsgId = new Set();
+    for (const it of listItems) {
+      if (!it.msgId || seenMsgId.has(it.msgId)) continue;
+      seenMsgId.add(it.msgId);
+      const parts = it.raw.split(/\s+/);
+      let date = "";
+      let sender = "";
+      let title = it.raw;
+      const dateMatch = it.raw.match(/(\d{2}\/\d{2}\/\d{4})/);
+      if (dateMatch) date = dateMatch[1];
+      const parenMatch = it.raw.match(/\(([^)]+)\)/);
+      if (parenMatch) sender = parenMatch[1].replace(/\s*\(מורה\)\s*$/, "").trim();
+      if (it.raw.length > 80) title = it.raw.slice(0, 80) + "...";
+
+      approvals.push({
+        msgId: it.msgId,
+        url: it.url,
+        label: title,
+        title,
+        sender,
+        date,
+        status: it.status,
+        itinerary: "",
+        requiredEquipment: [],
+      });
+      signoffs.push({ details: it.raw, msgId: it.msgId, url: it.url, status: it.status });
+    }
+
+    // 2. If we have list items, click first to load detail panel and extract itinerary + equipment
+    if (approvals.length > 0) {
+      const firstLink = page.locator("a[href*='msgId']").first();
+      if (await firstLink.isVisible({ timeout: 3000 }).catch(() => false)) {
+        await firstLink.click();
+        await sleep(1200);
+        const detail = await page.evaluate(() => {
+          const body = document.body?.innerText || "";
+          let itinerary = "";
+          let equipment = [];
+          const itMatch = body.match(/מסלול[\s:]*([^\n]+?)(?=\n\n|\nציוד|$)/s);
+          if (itMatch) itinerary = itMatch[1].trim();
+          const eqMatch = body.match(/ציוד נדרש[\s:]*([^\n]+?)(?=\n\n|$)/s);
+          if (eqMatch) {
+            const eqText = eqMatch[1];
+            equipment = eqText.split(/\n|•|·|\d+\./).map(s => s.trim()).filter(Boolean);
+          }
+          return { itinerary, equipment };
+        });
+        approvals[0].itinerary = detail.itinerary || "";
+        approvals[0].requiredEquipment = detail.equipment || [];
+      }
     }
   } catch (e) {
     if (process.env.WEBTOP_DEBUG === "1") process.stderr.write(`[debug] extractSignoffs: ${e.message}\n`);
   }
-  return signoffs;
+  return { signoffs, approvals };
 }
 
 // ── Notifications page ────────────────────────────────────────────────────────
@@ -800,7 +890,9 @@ async function extractMessages(page) {
 
   // ── Extract school events, signoffs, useful links ───────────────────────────
   const schoolEvents  = await extractSchoolEvents(page).catch(() => []);
-  const signoffs      = await extractSignoffs(page).catch(() => []);
+  const signoffResult = await extractSignoffs(page).catch(() => ({ signoffs: [], approvals: [] }));
+  const signoffs      = Array.isArray(signoffResult) ? signoffResult : (signoffResult?.signoffs || []);
+  const approvals     = signoffResult?.approvals || [];
   const externalLinks = await extractExternalSitesLinks(page).catch(() => []);
   // Merge dashboard links + external sites, dedupe by text|href
   const baseLinks = mainDashboard?.usefulLinks || [];
@@ -831,6 +923,7 @@ async function extractMessages(page) {
       messages:             messages,
       schoolEvents:         schoolEvents,
       signoffs:             signoffs,
+      approvals:            approvals,
       usefulLinks:          usefulLinks,
       _debug: {
         headingsFound:  mainDashboard?._headingsFound || [],
