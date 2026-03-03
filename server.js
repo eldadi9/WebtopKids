@@ -37,6 +37,7 @@ const DATA_CACHE_FILE     = join(__dirname, 'data_cache.json');
 const SPECIAL_EVENTS_FILE = join(__dirname, 'special_events.json');
 const REMINDERS_FILE      = join(__dirname, 'sent_reminders.json'); // persists across PM2 restarts
 const CHILDREN_CONFIG_FILE = join(__dirname, 'children_config.json');
+const EXTERNAL_LINKS_FILE  = join(__dirname, 'external_links.json');
 
 // ─── In-memory cache ──────────────────────────────────────────────────────────
 let cache = { data: null, timestamp: 0 };
@@ -390,6 +391,35 @@ app.get('/api/events', (req, res) => { res.json(loadSpecialEvents()); });
 // GET /api/children — per-child config (valid subjects, grade, birthdate)
 app.get('/api/children', (req, res) => { res.json(loadChildrenConfig()); });
 
+// GET /api/external-links — forms, links to external sites (merge config + scraped sidebarLinks)
+app.get('/api/external-links', (req, res) => {
+  let config = { links: [] };
+  try {
+    if (existsSync(EXTERNAL_LINKS_FILE))
+      config = JSON.parse(readFileSync(EXTERNAL_LINKS_FILE, 'utf8'));
+  } catch {}
+  const scraped = cache.data?.data?.sidebarLinks || [];
+  const merged = [...(config.links || [])];
+  const seen = new Set(config.links?.map(l => l.url) || []);
+  for (const s of scraped) {
+    if (s.href && !seen.has(s.href)) {
+      seen.add(s.href);
+      merged.push({ title: s.text, url: s.href, icon: '🔗' });
+    }
+  }
+  res.json({ ok: true, links: merged });
+});
+
+// POST /api/approvals/acknowledged — mark approval as approved when user clicks
+app.post('/api/approvals/acknowledged', (req, res) => {
+  const { id } = req.body || {};
+  if (!id) return res.status(400).json({ ok: false, error: 'missing id' });
+  const status = loadStatus();
+  status[id] = { acknowledged: true, at: new Date().toISOString() };
+  saveStatus(status);
+  res.json({ ok: true, id, acknowledged: true });
+});
+
 // POST /api/children/:name/photo — save base64 photo for a child
 app.post('/api/children/:name/photo', express.json({ limit: '10mb' }), (req, res) => {
   const name  = decodeURIComponent(req.params.name);
@@ -511,6 +541,16 @@ app.post('/api/homework/done', async (req, res) => {
 
   await sendTelegram(lines);
   res.json({ ok: true, id, done: true });
+});
+
+// POST /api/messages/read — mark message as read when user opens it
+app.post('/api/messages/read', (req, res) => {
+  const { id } = req.body || {};
+  if (!id) return res.status(400).json({ ok: false, error: 'missing id' });
+  const status = loadStatus();
+  status[id] = { read: true, at: new Date().toISOString() };
+  saveStatus(status);
+  res.json({ ok: true, id, read: true });
 });
 
 // POST /api/homework/undone — unmark (re-enables future reminders)

@@ -447,8 +447,12 @@ async function extractMessages(page) {
       return items;
     });
 
+    const seenMsg = new Map();
     for (const r of rows) {
       const [datePart, timePart] = (r.date || "").split(/\s+/);
+      const msgKey = `${r.from || ""}|${datePart || ""}|${(r.subject || "").slice(0, 80)}`;
+      if (seenMsg.has(msgKey)) continue;
+      seenMsg.set(msgKey, true);
       messages.push({
         from: r.from || "",
         subject: r.subject || "(ללא נושא)",
@@ -462,6 +466,91 @@ async function extractMessages(page) {
     if (process.env.WEBTOP_DEBUG === "1") process.stderr.write(`[debug] extractMessages error: ${e.message}\n`);
   }
   return messages;
+}
+
+// ── Approvals page (חתימות ואישורים) — trip permissions, signatures needed ─────
+async function extractApprovals(page) {
+  const approvals = [];
+  try {
+    let approvalLink = page.locator("a:has-text('חתימות ואישורים')").first();
+    if (!(await approvalLink.isVisible({ timeout: 2000 }).catch(() => false))) {
+      approvalLink = page.getByRole("link", { name: /חתימות ואישורים|אישורים/ }).first();
+    }
+    if (!(await approvalLink.isVisible({ timeout: 2000 }).catch(() => false))) {
+      try {
+        await page.goto(`${BASE_URL}/approvals`, { waitUntil: "domcontentloaded", timeout: 8000 });
+      } catch {
+        return [];
+      }
+    } else {
+      await approvalLink.click();
+      await page.waitForLoadState("networkidle", { timeout: TIMEOUT });
+    }
+    await sleep(600);
+
+    const rows = await page.evaluate(() => {
+      const items = [];
+      const sel = "tr, [class*='approval'], [class*='signature'], [class*='request'], mat-row, .mat-mdc-row, [class*='card'], [class*='item']";
+      const nodes = Array.from(document.querySelectorAll(sel));
+      for (const el of nodes) {
+        const text = el.textContent.trim().replace(/\s+/g, " ");
+        if (text.length < 15 || text.length > 800) continue;
+        if (text.includes("אישור") || text.includes("חתימה") || text.includes("טיול") || text.includes("אירוע")) {
+          items.push({ label: text.slice(0, 120), full: text });
+        }
+      }
+      return items;
+    });
+
+    const seen = new Set();
+    for (const r of rows) {
+      const key = (r.label || "").slice(0, 60);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      approvals.push({ label: r.label || "", full: (r.full || "").slice(0, 400) });
+    }
+  } catch (e) {
+    if (process.env.WEBTOP_DEBUG === "1") process.stderr.write(`[debug] extractApprovals error: ${e.message}\n`);
+  }
+  return approvals;
+}
+
+// ── Sidebar / hamburger menu — all nav links for external sites, forms ─────────
+async function extractSidebarLinks(page) {
+  const links = [];
+  try {
+    // Open hamburger/sidebar if it exists (mat-icon-button, menu icon, etc.)
+    const menuBtn = page.locator("button[aria-label*='menu'], button[aria-label*='תפריט'], .mat-icon-button").first();
+    if (await menuBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await menuBtn.click();
+      await sleep(500);
+    }
+
+    const items = await page.evaluate(() => {
+      const result = [];
+      const anchors = document.querySelectorAll("nav a, [class*='sidebar'] a, [class*='menu'] a, [class*='nav'] a");
+      for (const a of anchors) {
+        const href = a.getAttribute("href") || "";
+        const text = (a.textContent || "").trim().replace(/\s+/g, " ");
+        if (!text || text.length > 80) continue;
+        if (href && (href.startsWith("http") || href.startsWith("/"))) {
+          result.push({ text, href: href.startsWith("/") ? "https://webtop.smartschool.co.il" + href : href });
+        }
+      }
+      return result;
+    });
+
+    const seen = new Set();
+    for (const item of items) {
+      const key = `${item.text}|${item.href}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      links.push(item);
+    }
+  } catch (e) {
+    if (process.env.WEBTOP_DEBUG === "1") process.stderr.write(`[debug] extractSidebarLinks error: ${e.message}\n`);
+  }
+  return links;
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -536,6 +625,7 @@ async function extractMessages(page) {
   const classEventsByStudent = {};
   let   allNotifications     = [];
   let   mainDashboard        = null;
+  let   singleStudentName    = null; // captured when no multi-student switch
 
   // ── Multi-student extraction loop ─────────────────────────────────────────
   const loopStudents = (studentList && studentList.length > 1) ? studentList : [null];
@@ -555,6 +645,13 @@ async function extractMessages(page) {
     // Store class events keyed by student name
     if (studentName !== null) {
       classEventsByStudent[studentName] = dashboard.classEvents || [];
+    } else {
+      // Single-student: capture actual selected name from dropdown (header often = greeting)
+      const selText = await page.locator("mat-select").first().textContent().catch(() => "");
+      const t = (selText || "").trim();
+      if (t && t.length < 50 && !/צהריים|בוקר|ערב|טובים|טוב/.test(t)) {
+        singleStudentName = t;
+      }
     }
 
     // Extract notifications for this student (navigates to /התראות)
@@ -581,19 +678,30 @@ async function extractMessages(page) {
     }
   }
 
-  // ── Single-student fallback: map classEvents to detected student name ──────
+  // ── Single-student fallback: map classEvents ONLY to the student we scraped ──
+  // BUGFIX: mainDashboard.studentName often = greeting ("צהריים טובים, גונשרוביץ אלדד") not child name.
   if (!studentList || studentList.length <= 1) {
     mainDashboard = mainDashboard || {};
     const uniqueNames = [...new Set(allNotifications.map((n) => n.student).filter(Boolean))];
+    const dashboardStudent = singleStudentName || uniqueNames[0] || null;
+    if (dashboardStudent && !classEventsByStudent[dashboardStudent]) {
+      classEventsByStudent[dashboardStudent] = mainDashboard.classEvents || [];
+    }
     for (const name of uniqueNames) {
       if (!classEventsByStudent[name]) {
-        classEventsByStudent[name] = mainDashboard.classEvents || [];
+        classEventsByStudent[name] = [];
       }
     }
   }
 
   // ── Extract messages (הודעות) — once per account ───────────────────────────
   const messages = await extractMessages(page).catch(() => []);
+
+  // ── Extract approvals (חתימות ואישורים) — pending trip/event signatures ─────
+  const approvals = await extractApprovals(page).catch(() => []);
+
+  // ── Extract sidebar links (hamburger menu) for external forms/links ───────────
+  const sidebarLinks = await extractSidebarLinks(page).catch(() => []);
 
   await context.close();
 
@@ -610,6 +718,8 @@ async function extractMessages(page) {
       tables:               mainDashboard?.tables      || [],
       notifications:        allNotifications,
       messages:             messages,
+      approvals:            approvals,
+      sidebarLinks:         sidebarLinks,
       _debug: {
         headingsFound:  mainDashboard?._headingsFound || [],
         studentsFound:  studentList || [],

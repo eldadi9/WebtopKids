@@ -1,0 +1,8 @@
+{
+  "links": [
+    { "title": "אתר בית הספר", "url": "https://webtop.smartschool.co.il", "icon": "🏫" },
+    { "title": "חתימות ואישורים", "url": "https://webtop.smartschool.co.il/approvals", "icon": "✍️" },
+    { "title": "תיבת הודעות", "url": "https://webtop.smartschool.co.il/messages", "icon": "📨" },
+    { "title": "ריכוז מידע", "url": "https://webtop.smartschool.co.il/dashboard", "icon": "📋" }
+  ]
+}

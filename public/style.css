@@ -1313,18 +1313,18 @@ body.theme-light .stab:hover { background: rgba(0,0,0,0.06); }
    ═══════════════════════════════════════════════════════════════════ */
 .logo-banner {
   display: flex;
-  flex-direction: row;          /* horizontal: logo + name side-by-side */
+  flex-direction: row;
   align-items: center;
   justify-content: center;
-  padding: 0.55rem 1rem;        /* compact — only ~68px total height */
+  padding: 1rem 1.25rem;
   background: linear-gradient(135deg, #0d1529 0%, #1a2235 100%);
   border-bottom: 1px solid var(--border);
-  gap: 0.65rem;
+  gap: 1rem;
 }
 .logo-banner-img {
-  width: 52px;
-  height: 52px;
-  border-radius: 14px;
+  width: 88px;
+  height: 88px;
+  border-radius: 18px;
   object-fit: cover;
   box-shadow: 0 4px 16px rgba(59, 130, 246, 0.35), 0 2px 6px rgba(0,0,0,0.4);
   border: 1.5px solid rgba(255,255,255,0.10);
@@ -1332,7 +1332,7 @@ body.theme-light .stab:hover { background: rgba(0,0,0,0.06); }
   flex-shrink: 0;
 }
 .logo-banner-name {
-  font-size: 1.15rem;
+  font-size: 1.5rem;
   font-weight: 800;
   color: #60a5fa;
   letter-spacing: 0.07em;

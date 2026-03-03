@@ -7,6 +7,7 @@ let lastSyncTime   = null;
 let lastEvents     = [];   // special events from /api/events (birthdays, meetings)
 let lastChildren   = { children: [] }; // per-child config: valid subjects, grade, birthdate
 let lastInsights   = null; // smart insights from /api/insights
+let lastExternalLinks = []; // external links (forms, webtop pages)
 
 /* ─── Card data store (index → notification object) ───────────────────── */
 let _cardStore = {};
@@ -22,6 +23,22 @@ function allocCard(n) {
 let ptrStartY  = 0;
 let ptrPulling = false;
 const PTR_THRESHOLD = 70;
+
+/* ─── Fix spacing in displayed text (אתר מוציא מילים מחוברות) ────────────── */
+function fixSpacingForDisplay(str) {
+  if (!str || typeof str !== 'string') return str;
+  return str
+    .replace(/חיסוריום/g, 'חיסור יום')
+    .replace(/איחוריום/g, 'איחור יום')
+    .replace(/מילהטובה/g, 'מילה טובה')
+    .replace(/חוסרציוד/g, 'חוסר ציוד')
+    .replace(/לימודיום/g, 'לימודי יום')
+    .replace(/שיעוריום/g, 'שיעורי יום')
+    .replace(/ביתיום/g, 'ביית יום')
+    .replace(/חוסר ציוד לימודיום/g, 'חוסר ציוד לימודי יום')
+    .replace(/אירועישיעור/g, 'אירועי שיעור')
+    .replace(/נושאישיעור/g, 'נושאי שיעור');
+}
 
 /* ─── Type labels & icons ──────────────────────────────────────────────── */
 const TYPE_LABEL = {
@@ -41,18 +58,28 @@ async function fetchAll(forceRefresh = false) {
   showErrorBanner(false);
   try {
     const url = forceRefresh ? '/api/data?refresh=1' : '/api/data';
-    const [dataRes, statusRes, eventsRes, childrenRes, insightsRes] = await Promise.all([
+    const results = await Promise.allSettled([
       fetch(url),
       fetch('/api/status'),
       fetch('/api/events'),
       fetch('/api/children'),
       fetch('/api/insights'),
+      fetch('/api/external-links'),
     ]);
-    lastData     = await dataRes.json();
-    lastStatus   = await statusRes.json();
-    try { lastEvents   = await eventsRes.json();   } catch { lastEvents = []; }
-    try { lastChildren = await childrenRes.json(); } catch { lastChildren = { children: [] }; }
-    try { lastInsights = await insightsRes.json(); } catch { lastInsights = null; }
+    const dataRes   = results[0].status === 'fulfilled' ? results[0].value : null;
+    const statusRes = results[1].status === 'fulfilled' ? results[1].value : null;
+    const eventsRes = results[2].status === 'fulfilled' ? results[2].value : null;
+    const childrenRes = results[3].status === 'fulfilled' ? results[3].value : null;
+    const insightsRes = results[4].status === 'fulfilled' ? results[4].value : null;
+    const extLinksRes = results[5].status === 'fulfilled' ? results[5].value : null;
+
+    try { lastData = dataRes ? await dataRes.json() : null; } catch { lastData = null; }
+    lastData = lastData?.ok ? lastData : { ok: false, error: lastData?.error || 'No data' };
+    try { lastStatus = statusRes?.ok ? await statusRes.json() : {}; } catch { lastStatus = {}; }
+    try { lastEvents = eventsRes?.ok ? await eventsRes.json() : []; } catch { lastEvents = []; }
+    try { lastChildren = childrenRes?.ok ? await childrenRes.json() : { children: [] }; } catch { lastChildren = { children: [] }; }
+    try { lastInsights = insightsRes?.ok ? await insightsRes.json() : null; } catch { lastInsights = null; }
+    try { const ext = extLinksRes?.ok ? await extLinksRes.json() : {}; lastExternalLinks = ext?.links || []; } catch { lastExternalLinks = []; }
     if (!Array.isArray(lastEvents)) lastEvents = [];
 
     if (!lastData?.ok && (lastData?.error || !lastData?.ok)) {
@@ -115,9 +142,7 @@ function render(data, status) {
   }
 
   const notifications = d.notifications || [];
-  const classEvents   = (d.classEventsByStudent && currentStudent && d.classEventsByStudent[currentStudent])
-                        ? d.classEventsByStudent[currentStudent]
-                        : (d.classEvents || []);
+  const classEvents   = getClassEventsForStudent(d, currentStudent);
 
   updateStudentSwitcher(notifications);
   renderStats(notifications, classEvents);
@@ -130,16 +155,14 @@ function rerender() {
   if (!lastData?.ok) return;
   const d             = lastData.data || {};
   const notifications = d.notifications || [];
-  const classEvents   = (d.classEventsByStudent && currentStudent && d.classEventsByStudent[currentStudent])
-                        ? d.classEventsByStudent[currentStudent]
-                        : (d.classEvents || []);
+  const classEvents   = getClassEventsForStudent(d, currentStudent);
 
   // Reset card store every full re-render
   _cardStore = {};
   _cardIdx   = 0;
 
   const visible = currentStudent
-    ? notifications.filter(n => n.student === currentStudent)
+    ? notifications.filter(n => studentMatches(n.student, currentStudent))
     : notifications;
 
   renderHomework(visible, lastStatus);
@@ -150,6 +173,7 @@ function rerender() {
   renderApprovals();
   renderMessages();
   renderFeed(visible);
+  renderExternalLinks();
   updateTabCounts(visible, classEvents);
 }
 
@@ -170,18 +194,15 @@ function updateTabCounts(notifications, classEvents) {
     el.classList.toggle('tab-has-data', count > 0);
   };
   const msgs = (lastData?.data?.messages || []).filter(m => !m.read).length;
+  const scrapedApprovals = lastData?.data?.approvals || [];
+  const pendingScraped = scrapedApprovals.filter(a => !lastStatus[approvalId(a)]?.acknowledged).length;
   const approvals = lastEvents.filter(ev =>
     ev.type === 'event' || /אישור/.test(ev.details || '')
-  ).filter(ev =>
-    !ev.childName || !currentStudent || ev.childName === currentStudent
-  ).length + notifications.filter(n => n.type === 'approval').length;
-
-  setTab('tab-homework',  '📚', 'שיעורי בית', hw);
-  setTab('tab-alerts',    '⚠️', 'התראות',      alerts);
-  setTab('tab-grades',    '🏅', 'ציונים',      grades);
-  setTab('tab-calendar',  '📅', 'יומן',        calItems);
+  ).filter(ev => !ev.childName || !currentStudent || ev.childName === currentStudent).length
+    + notifications.filter(n => n.type === 'approval').length + pendingScraped;
   setTab('tab-approvals', '✍️', 'אישורים',     approvals);
   setTab('tab-messages',  '📨', 'הודעות',      msgs);
+  setTab('tab-external',  '🔗', 'אתרים חיצוניים', lastExternalLinks.length);
 }
 
 /* ─── Student switcher (dropdown) ─────────────────────────────────────── */
@@ -497,18 +518,29 @@ function renderHomework(notifications, status) {
   let html = '';
 
   if (!pending.length) {
-    // All done — celebrate
     html += '<div class="empty" data-icon="🎉">כל שיעורי הבית הושלמו!</div>';
   } else {
+    html += '<h3 class="group-title">📚 שיעורי בית פעילים</h3>';
     html += pending.map(n => hwCard(n, homeworkId(n), false)).join('');
   }
 
-  // History button — shown whenever there are completed items
+  // Completed section — always show when there are completed items
   if (done.length) {
-    html += `
-      <button class="btn-hw-history" onclick="openHomeworkHistory()">
-        📋 היסטוריה — ${done.length} שיעורי בית הושלמו
-      </button>`;
+    html += '<h3 class="group-title">✅ הושלמו</h3>';
+    const showCount = Math.min(5, done.length);
+    const toShow = done.slice(0, showCount);
+    html += toShow.map(n => hwCard(n, homeworkId(n), true)).join('');
+    if (done.length > showCount) {
+      html += `
+        <button class="btn-hw-history" onclick="openHomeworkHistory()">
+          📋 הצג את כל ${done.length} שיעורי בית שהושלמו
+        </button>`;
+    } else if (done.length > 0) {
+      html += `
+        <button class="btn-hw-history" onclick="openHomeworkHistory()">
+          📋 היסטוריה מלאה
+        </button>`;
+    }
   }
 
   container.innerHTML = html;
@@ -676,6 +708,7 @@ function renderClassEvents(classEvents) {
   }
 
   container.innerHTML = real.map(raw => {
+    raw = fixSpacingForDisplay(raw);
     let type = 'general';
     if      (raw.includes('חוסר ציוד'))                                type = 'missing_equipment';
     else if (raw.includes('אי הכנת שיעורי'))                           type = 'homework_not_done';
@@ -748,7 +781,7 @@ function renderCalendar(notifications, classEvents, specialEvents) {
   for (const ev of specialEvents) {
     if (!ev.date) continue;
     // Filter by childName if the event belongs to a specific child
-    if (ev.childName && currentStudent && ev.childName !== currentStudent) continue;
+    if (ev.childName && currentStudent && !studentMatches(ev.childName, currentStudent)) continue;
     // Filter by grade if event name or details mention a specific class grade
     if (!isEventValidForCurrentChild((ev.name || '') + ' ' + (ev.details || ''))) continue;
     // Accept "DD/MM" (recurring) or "DD/MM/YYYY" (one-time)
@@ -831,11 +864,14 @@ function renderCalendar(notifications, classEvents, specialEvents) {
         ? `<div class="card-teacher">👤 ${esc(item.teacher)}${item.lesson ? ` · שיעור ${esc(item.lesson)}` : ''}</div>`
         : (item.lesson ? `<div class="card-teacher">שיעור ${esc(item.lesson)}</div>` : '');
 
+      const labelDisp = fixSpacingForDisplay(item.label);
+      const subDisp   = item.sub ? fixSpacingForDisplay(item.sub) : '';
+
       html += `
         <div class="card ${typeClass} clickable-card cal-item"
              data-card-idx="${idx}" data-hw-id="${hwIdVal}">
-          <div class="card-title">${specialBadge}${esc(item.label)}</div>
-          ${item.sub ? `<div class="card-desc">${esc(item.sub)}</div>` : ''}
+          <div class="card-title">${specialBadge}${esc(labelDisp)}</div>
+          ${subDisp ? `<div class="card-desc">${esc(subDisp)}</div>` : ''}
           ${teacherRow}
         </div>`;
     }
@@ -857,7 +893,7 @@ function renderApprovals() {
   // 1. Special events that need parent approval (type "event" or "נדרש אישור" in details)
   for (const ev of lastEvents) {
     if (!ev.date) continue;
-    if (ev.childName && currentStudent && ev.childName !== currentStudent) continue;
+    if (ev.childName && currentStudent && !studentMatches(ev.childName, currentStudent)) continue;
     if (ev.type === 'event' || /אישור/.test(ev.details || '')) {
       approvalItems.push({
         label: `${ev.emoji || '📋'} ${ev.name}`,
@@ -871,12 +907,25 @@ function renderApprovals() {
   // 2. Any approval-type notifications from the scraper
   for (const n of notifications) {
     if (n.type !== 'approval') continue;
-    if (currentStudent && n.student && n.student !== currentStudent) continue;
+    if (currentStudent && n.student && !studentMatches(n.student, currentStudent)) continue;
     approvalItems.push({
       label: n.subject || 'אישור',
       sub:   n.homeworkText || n.description || '',
       date:  n.date || '',
       type:  'approval',
+    });
+  }
+
+  // 3. Dedicated approvals from חתימות ואישורים page (scraper) — exclude acknowledged
+  const scrapedApprovals = lastData?.data?.approvals || [];
+  for (const a of scrapedApprovals) {
+    if (lastStatus[approvalId(a)]?.acknowledged) continue;
+    approvalItems.push({
+      label:  a.label || 'אישור נדרש',
+      sub:    a.full && a.full !== a.label ? a.full : '',
+      date:   '',
+      type:   'scraped',
+      id:     approvalId(a),
     });
   }
 
@@ -892,15 +941,58 @@ function renderApprovals() {
     return;
   }
 
-  container.innerHTML = approvalItems.map(item => `
-    <div class="card type-general">
+  const webtopApprovalsUrl = 'https://webtop.smartschool.co.il/approvals';
+  container.innerHTML = approvalItems.map(item => {
+    const aid = (item.id || '').replace(/'/g, "\\'");
+    const onClick = aid
+      ? `handleApprovalClick('${aid}', '${webtopApprovalsUrl}')`
+      : `window.open('${webtopApprovalsUrl}', '_blank')`;
+    return `
+    <div class="card type-general approval-card" onclick="${onClick}" style="cursor:pointer;" data-approval-id="${esc(aid)}">
       <div class="card-header">
         <span class="card-title">${esc(item.label)}</span>
         <span class="badge badge-general">✍️ אישור</span>
       </div>
       ${item.date ? `<div class="card-meta">📅 ${esc(item.date)}</div>` : ''}
       ${item.sub  ? `<div class="card-desc">${esc(item.sub)}</div>`  : ''}
-    </div>`).join('');
+      <div class="card-meta" style="margin-top:0.5rem; font-size:0.75rem; color:#94a3b8;">לחץ לפתיחה באתר — חתימה ›</div>
+    </div>`;
+  }).join('');
+}
+
+async function handleApprovalClick(approvalId, url) {
+  if (approvalId) {
+    try {
+      await fetch('/api/approvals/acknowledged', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: approvalId }),
+      });
+    } catch (e) { console.warn('handleApprovalClick:', e); }
+    rerender();
+  }
+  window.open(url || 'https://webtop.smartschool.co.il/approvals', '_blank');
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SECTION: אתרים חיצוניים — External links, forms
+   ═══════════════════════════════════════════════════════════════ */
+function renderExternalLinks() {
+  const container = document.getElementById('external-list');
+  if (!container) return;
+
+  const links = lastExternalLinks || [];
+  if (!links.length) {
+    container.innerHTML = '<div class="empty" data-icon="🔗">אין קישורים חיצוניים</div>';
+    return;
+  }
+
+  container.innerHTML = links.map(l => `
+    <a href="${esc(l.url || '#')}" target="_blank" rel="noopener" class="card type-general" style="display:block; text-decoration:none; color:inherit;">
+      <div class="card-header">
+        <span class="card-title">${l.icon || '🔗'} ${esc(l.title || 'קישור')}</span>
+      </div>
+      <div class="card-meta" style="font-size:0.75rem; color:#94a3b8;">${esc((l.url || '').replace(/^https?:\/\//, '').slice(0, 50))}</div>
+    </a>`).join('');
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -931,18 +1023,29 @@ function renderMessages() {
   }
 
   // Filter by currentStudent if set
-  const filtered = currentStudent
-    ? messages.filter(m => !m.student || m.student === currentStudent)
+  let filtered = currentStudent
+    ? messages.filter(m => !m.student || studentMatches(m.student, currentStudent))
     : messages;
+
+  // Client-side deduplication (safety net if scraper still produces dupes)
+  const seen = new Map();
+  filtered = filtered.filter(m => {
+    const k = msgId(m);
+    if (seen.has(k)) return false;
+    seen.set(k, true);
+    return true;
+  });
+
+  const isRead = (m) => m.read || lastStatus[msgId(m)]?.read;
 
   // Sort: unread first, then most-recent first
   const sorted = [...filtered].sort((a, b) => {
-    if (!!a.read !== !!b.read) return a.read ? 1 : -1;
+    if (!!isRead(a) !== !!isRead(b)) return isRead(a) ? 1 : -1;
     return dateSortKey(b.date) - dateSortKey(a.date);
   });
 
-  const unread = sorted.filter(m => !m.read);
-  const read   = sorted.filter(m =>  m.read);
+  const unread = sorted.filter(m => !isRead(m));
+  const read   = sorted.filter(m =>  isRead(m));
 
   let html = '';
   if (unread.length) {
@@ -958,7 +1061,7 @@ function renderMessages() {
 }
 
 function msgCard(m) {
-  // Map message fields onto the standard notification shape used by openCardDetail
+  const readStatus = m.read || lastStatus[msgId(m)]?.read;
   const cardObj = {
     type:        'message',
     subject:     m.subject  || '(ללא נושא)',
@@ -966,8 +1069,9 @@ function msgCard(m) {
     alertDay:    m.from     ? `${m.from}${m.fromRole ? ` · ${m.fromRole}` : ''}` : null,
     date:        m.date     || null,
     alertTime:   m.time     || null,
-    category:    m.read ? 'נקרא ✓' : 'לא נקרא',
+    category:    readStatus ? 'נקרא ✓' : 'לא נקרא',
     description: m.body     || null,
+    _msgRaw:     m,
   };
   const idx  = allocCard(cardObj);
   const meta = [
@@ -982,11 +1086,11 @@ function msgCard(m) {
     : '';
 
   return `
-    <div class="card type-message${!m.read ? ' msg-unread-card' : ''} clickable-card"
-         data-card-idx="${idx}" data-hw-id="">
+    <div class="card type-message${!readStatus ? ' msg-unread-card' : ''} clickable-card"
+         data-card-idx="${idx}" data-hw-id="" data-msg-id="${esc(msgId(m))}">
       <div class="card-header">
         <span class="card-title">${esc(cardObj.subject)}</span>
-        ${!m.read
+        ${!readStatus
           ? '<span class="badge badge-message">📨 חדש</span>'
           : '<span class="badge badge-message-read">✓ נקרא</span>'}
       </div>
@@ -1041,10 +1145,12 @@ function renderFeed(notifications) {
 /* ═══════════════════════════════════════════════════════════════
    MODAL — פרטים מלאים בלחיצה על כרטיס
    ═══════════════════════════════════════════════════════════════ */
-function openCardDetail(n, hwId) {
+function openCardDetail(n, hwId, msgIdParam) {
   const modal   = document.getElementById('detail-modal');
   const content = document.getElementById('modal-content');
   if (!modal || !content || !n) return;
+  const mid = msgIdParam || (n.type === 'message' && n._msgRaw ? msgId(n._msgRaw) : '');
+  if (n.type === 'message' && mid) markMessageRead(mid);
 
   const label   = TYPE_LABEL[n.type] || TYPE_LABEL.general;
   const done    = hwId && lastStatus[hwId]?.done;
@@ -1121,7 +1227,7 @@ function closeModal() {
 /* ─── Homework history modal ────────────────────────────────────────────── */
 function openHomeworkHistory() {
   const all     = (lastData?.data?.notifications || []).filter(n => n.type === 'homework' && n.date);
-  const visible = currentStudent ? all.filter(n => n.student === currentStudent) : all;
+  const visible = currentStudent ? all.filter(n => studentMatches(n.student, currentStudent)) : all;
   const done    = visible
     .filter(n => lastStatus[homeworkId(n)]?.done)
     .sort((a, b) => {
@@ -1189,7 +1295,8 @@ document.addEventListener('click', e => {
   if (!card) return;
   const n    = _cardStore[+card.dataset.cardIdx];
   const hwId = card.dataset.hwId || '';
-  if (n) openCardDetail(n, hwId);
+  const msgIdVal = card.dataset.msgId || '';
+  if (n) openCardDetail(n, hwId, msgIdVal);
 });
 
 // Close modal on Escape
@@ -1207,6 +1314,20 @@ function handleMarkDone(btn) {
     alertDay:    btn.dataset.alertDay,
     description: btn.dataset.description,
   });
+}
+
+async function markMessageRead(id) {
+  try {
+    const res = await fetch('/api/messages/read', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const j = await res.json();
+    if (j.ok) {
+      lastStatus[id] = { read: true };
+      rerender();
+    }
+  } catch (e) { console.warn('markMessageRead:', e); }
 }
 
 async function markDone(id, homeworkText, studentName, btn, extra = {}) {
@@ -1373,6 +1494,7 @@ function isSubjectValid(studentName, subject) {
  * Returns { type, date, lesson, teacher, title, note, raw }
  */
 function parseClassEvent(raw) {
+  raw = fixSpacingForDisplay(raw);
   const parts      = raw.split('|').map(s => s.trim());
   const title      = parts[0] || raw;
   const dateMatch  = raw.match(/(\d{2}\/\d{2}\/\d{4})/);
@@ -1474,8 +1596,27 @@ function esc(str) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+function approvalId(a) {
+  return 'approval_' + (a?.label || a?.full || '').replace(/\s+/g, '_').slice(0, 50);
+}
 function homeworkId(n) {
   return `${n.subject || ''}_${n.date || ''}_${n.lesson || ''}`;
+}
+function studentMatches(stored, selected) {
+  if (!stored || !selected) return !stored && !selected;
+  if (stored === selected) return true;
+  return stored.includes(selected) || selected.includes(stored);
+}
+function getClassEventsForStudent(d, currentStudent) {
+  const byStudent = d?.classEventsByStudent;
+  if (!byStudent || !currentStudent) return d?.classEvents || [];
+  if (byStudent[currentStudent]) return byStudent[currentStudent];
+  const key = Object.keys(byStudent).find(k => studentMatches(k, currentStudent));
+  return key ? byStudent[key] : [];
+}
+function msgId(m) {
+  const s = `${m.from || ''}|${m.date || ''}|${(m.subject || '').slice(0, 50)}`;
+  return 'msg_' + s.replace(/[^a-zA-Z0-9\u0590-\u05FF|_\-\/\.]/g, '_');
 }
 function dateSortKey(dateStr) {
   if (!dateStr) return 0;

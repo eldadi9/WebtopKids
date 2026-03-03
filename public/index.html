@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=3" />
+  <link rel="stylesheet" href="style.css?v=5" />
 </head>
 <body>
 
@@ -88,6 +88,7 @@
       <button class="stab"        data-section="approvals" id="tab-approvals">✍️ אישורים</button>
       <button class="stab"        data-section="messages"  id="tab-messages">📨 הודעות</button>
       <button class="stab"        data-section="feed"      id="tab-feed">📬 הכל</button>
+      <button class="stab"        data-section="external"  id="tab-external">🔗 אתרים חיצוניים</button>
     </nav>
 
   </div>
@@ -151,6 +152,13 @@
     </div>
   </section>
 
+  <!-- ══ SECTION: אתרים חיצוניים (טפסים, קישורים) ══ -->
+  <section id="section-external" class="page-section hidden">
+    <div class="single-col">
+      <div id="external-list" class="card-list"></div>
+    </div>
+  </section>
+
   <!-- ══ CROP MODAL — photo positioning before save ══ -->
   <div id="crop-modal" class="modal-overlay hidden" style="z-index:300">
     <div class="crop-sheet">
@@ -177,6 +185,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=3"></script>
+  <script src="app.js?v=5"></script>
 </body>
 </html>
