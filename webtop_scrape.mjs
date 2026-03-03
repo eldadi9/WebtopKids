@@ -490,12 +490,29 @@ async function extractExternalSitesLinks(page) {
 }
 
 // ── Signoffs (חתימות ואישורים) — full structured data from signMessaes ────
+// Navigate via dashboard (click link) to avoid /error "access denied" on direct URL
 async function extractSignoffs(page) {
   const signoffs = [];
   const approvals = [];  // structured: msgId, url, title, sender, date, status, itinerary, requiredEquipment
   try {
-    await page.goto(`${BASE_URL}/signMessaes`, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
-    await sleep(1500);
+    // סעיף 2: גישה דרך Dashboard במקום ישיר — מקטין סיכון ל-/error
+    await page.goto(`${BASE_URL}/dashboard`, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+    await sleep(1200);
+
+    const signLink = page.locator("a:has-text('חתימות ואישורים'), a[href*='signMessaes']").first();
+    if (await signLink.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await signLink.click();
+      await page.waitForLoadState("networkidle", { timeout: TIMEOUT });
+      await sleep(1500);
+    } else {
+      await page.goto(`${BASE_URL}/signMessaes`, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+      await sleep(1500);
+    }
+
+    if (page.url().includes("/error")) {
+      if (process.env.WEBTOP_DEBUG === "1") process.stderr.write("[debug] Landed on /error — access denied\n");
+      return { signoffs, approvals };
+    }
 
     // 1. Extract list items with msgId links (right panel)
     const listItems = await page.evaluate(() => {
@@ -812,10 +829,11 @@ async function extractMessages(page) {
   }
 
   const classEventsByStudent = {};
+  const schoolEventsByStudent = {};
   let   allNotifications     = [];
   let   mainDashboard        = null;
 
-  // ── Multi-student extraction loop ─────────────────────────────────────────
+  // ── Multi-student extraction loop — כל ילדה בנפרד ─────────────────────────
   const loopStudents = (studentList && studentList.length > 1) ? studentList : [null];
 
   for (let i = 0; i < loopStudents.length; i++) {
@@ -836,9 +854,20 @@ async function extractMessages(page) {
     const dashboard = await extractDashboard(page);
     if (!mainDashboard) mainDashboard = dashboard;
 
-    // Store class events keyed by student name
+    // Store class events keyed by full name AND short name (אמי / גונשרוביץ אמי)
     if (studentName !== null) {
-      classEventsByStudent[studentName] = dashboard.classEvents || [];
+      const events = dashboard.classEvents || [];
+      classEventsByStudent[studentName] = events;
+      const shortName = studentName.split(/\s+/).pop() || studentName;
+      if (shortName !== studentName) classEventsByStudent[shortName] = events;
+    }
+
+    // Extract school events (יומן פגישות) per student — אסיפות הורים וכו'
+    if (studentName !== null) {
+      const schoolEv = await extractSchoolEvents(page).catch(() => []);
+      schoolEventsByStudent[studentName] = schoolEv;
+      const shortName = studentName.split(/\s+/).pop() || studentName;
+      if (shortName !== studentName) schoolEventsByStudent[shortName] = schoolEv;
     }
 
     // Extract notifications for this student (navigates to /התראות)
@@ -874,13 +903,17 @@ async function extractMessages(page) {
   }
   allNotifications = Array.from(seenNotifs.values());
 
-  // ── Single-student fallback: map classEvents to detected student name ──────
+  // ── Single-student fallback: map classEvents + schoolEvents to detected student name ──
   if (!studentList || studentList.length <= 1) {
     mainDashboard = mainDashboard || {};
     const uniqueNames = [...new Set(allNotifications.map((n) => n.student).filter(Boolean))];
+    const fallbackSchool = await extractSchoolEvents(page).catch(() => []);
     for (const name of uniqueNames) {
       if (!classEventsByStudent[name]) {
         classEventsByStudent[name] = mainDashboard.classEvents || [];
+      }
+      if (!schoolEventsByStudent[name]) {
+        schoolEventsByStudent[name] = fallbackSchool;
       }
     }
   }
@@ -888,8 +921,9 @@ async function extractMessages(page) {
   // ── Extract messages (הודעות) — once per account ───────────────────────────
   const messages = await extractMessages(page).catch(() => []);
 
-  // ── Extract school events, signoffs, useful links ───────────────────────────
-  const schoolEvents  = await extractSchoolEvents(page).catch(() => []);
+  // ── schoolEvents: backward compat (merge all per-student for API consumers that expect flat list)
+  const schoolEvents = Object.values(schoolEventsByStudent).flat();
+  const schoolEventsUnique = [...new Map(schoolEvents.map(e => [e.name, e])).values()];
   const signoffResult = await extractSignoffs(page).catch(() => ({ signoffs: [], approvals: [] }));
   const signoffs      = Array.isArray(signoffResult) ? signoffResult : (signoffResult?.signoffs || []);
   const approvals     = signoffResult?.approvals || [];
@@ -921,7 +955,8 @@ async function extractMessages(page) {
       tables:               mainDashboard?.tables      || [],
       notifications:        allNotifications,
       messages:             messages,
-      schoolEvents:         schoolEvents,
+      schoolEvents:         schoolEventsUnique,
+      schoolEventsByStudent,
       signoffs:             signoffs,
       approvals:            approvals,
       usefulLinks:          usefulLinks,

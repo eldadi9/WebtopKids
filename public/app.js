@@ -81,13 +81,20 @@ async function fetchAll(forceRefresh = false) {
     const insightsRes = results[4].status === 'fulfilled' ? results[4].value : null;
     const extLinksRes = results[5].status === 'fulfilled' ? results[5].value : null;
 
-    try { lastData = dataRes ? await dataRes.json() : null; } catch { lastData = null; }
+    const safeJson = async (res, fallback) => {
+      if (!res || !res.ok) return fallback;
+      const ct = res.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) return fallback;
+      try { return await res.json(); } catch { return fallback; }
+    };
+    lastData = await safeJson(dataRes, null);
     lastData = lastData?.ok ? lastData : { ok: false, error: lastData?.error || 'No data' };
-    try { lastStatus = statusRes?.ok ? await statusRes.json() : {}; } catch { lastStatus = {}; }
-    try { lastEvents = eventsRes?.ok ? await eventsRes.json() : []; } catch { lastEvents = []; }
-    try { lastChildren = childrenRes?.ok ? await childrenRes.json() : { children: [] }; } catch { lastChildren = { children: [] }; }
-    try { lastInsights = insightsRes?.ok ? await insightsRes.json() : null; } catch { lastInsights = null; }
-    try { const ext = extLinksRes?.ok ? await extLinksRes.json() : {}; lastExternalLinks = ext?.links || []; } catch { lastExternalLinks = []; }
+    lastStatus = await safeJson(statusRes, {});
+    lastEvents = await safeJson(eventsRes, []);
+    lastChildren = await safeJson(childrenRes, { children: [] });
+    lastInsights = await safeJson(insightsRes, null);
+    const ext = await safeJson(extLinksRes, { links: [] });
+    lastExternalLinks = ext?.links || [];
     if (!Array.isArray(lastEvents)) lastEvents = [];
 
     if (!lastData?.ok && (lastData?.error || !lastData?.ok)) {
@@ -95,7 +102,10 @@ async function fetchAll(forceRefresh = false) {
     }
 
     lastSyncTime = new Date();
-    render(lastData, lastStatus);
+    try { render(lastData, lastStatus); } catch (err) {
+      console.error('render error:', err);
+      showErrorBanner(true);
+    }
   } catch (err) {
     console.error('fetchAll error:', err);
     showErrorBanner(true);
@@ -150,9 +160,7 @@ function render(data, status) {
   }
 
   const notifications = d.notifications || [];
-  const classEvents   = (d.classEventsByStudent && currentStudent && d.classEventsByStudent[currentStudent])
-                        ? d.classEventsByStudent[currentStudent]
-                        : (d.classEvents || []);
+  const classEvents   = resolveClassEventsForStudent(d.classEventsByStudent, currentStudent, d.classEvents);
 
   updateStudentSwitcher(notifications);
   renderStats(notifications, classEvents);
@@ -163,11 +171,9 @@ function render(data, status) {
 /* ─── Re-render all sections ───────────────────────────────────────────── */
 function rerender() {
   if (!lastData?.ok) return;
-  const d             = lastData.data || {};
+  const d             = lastData.data && typeof lastData.data === 'object' ? lastData.data : {};
   const notifications = d.notifications || [];
-  const classEvents   = (d.classEventsByStudent && currentStudent && d.classEventsByStudent[currentStudent])
-                        ? d.classEventsByStudent[currentStudent]
-                        : (d.classEvents || []);
+  const classEvents   = resolveClassEventsForStudent(d.classEventsByStudent, currentStudent, d.classEvents);
 
   // Reset card store every full re-render
   _cardStore = {};
@@ -182,11 +188,12 @@ function rerender() {
   renderGrades(visible);
   renderClassEvents(classEvents);
   (() => {
-    const schoolEvents = lastData?.data?.schoolEvents || [];
+    const schoolEvResolved = resolveSchoolEventsForStudent(
+      lastData?.data?.schoolEventsByStudent, currentStudent, lastData?.data?.schoolEvents || []);
     const mergedEvents = [...lastEvents];
     const today = new Date();
     const todayStr = `${String(today.getDate()).padStart(2,'0')}/${String(today.getMonth()+1).padStart(2,'0')}/${today.getFullYear()}`;
-    for (const se of schoolEvents) {
+    for (const se of schoolEvResolved) {
       mergedEvents.push({ name: se.name, type: se.type || 'event', date: todayStr, details: se.details || '', emoji: '🏫' });
     }
     renderCalendar(visible, classEvents, mergedEvents);
@@ -975,6 +982,7 @@ function renderApprovals() {
   }
 
   container.innerHTML = approvalItems.map(item => {
+    try {
     const id = approvalId(item);
     const approved = item.approved || lastStatus[id]?.approved;
     const statusBadge = approved
@@ -1002,14 +1010,17 @@ function renderApprovals() {
         ${!approved ? `<button class="btn-approval-done" data-approval-id="${esc(id)}" data-approval-url="${item.url ? esc(item.url) : ''}">✓ אישרתי</button>` : ''}
       </div>
     </div>`;
+    } catch (e) { console.warn('approval item error:', item, e); return ''; }
   }).join('');
 
+  if (container) {
   container.querySelectorAll('.approval-checkbox:not([disabled])').forEach(cb => {
     cb.onclick = (e) => { e.stopPropagation(); markApprovalDone(cb.dataset.approvalId, cb.dataset.approvalUrl); };
   });
   container.querySelectorAll('.btn-approval-done').forEach(btn => {
     btn.onclick = () => markApprovalDone(btn.dataset.approvalId, btn.dataset.approvalUrl);
   });
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1610,6 +1621,32 @@ function parseClassEvent(raw) {
    ═══════════════════════════════════════════════════════════════ */
 const GRADE_MAP = { 'א': 1, 'ב': 2, 'ג': 3, 'ד': 4, 'ה': 5, 'ו': 6, 'ז': 7, 'ח': 8 };
 
+/** Resolve classEvents for currentStudent — handles "אמי" vs "גונשרוביץ אמי" key mismatch */
+function resolveClassEventsForStudent(byStudent, currentStudent, fallback) {
+  if (!byStudent) return fallback || [];
+  if (currentStudent && byStudent[currentStudent]) return byStudent[currentStudent];
+  if (!currentStudent) return fallback || [];
+  const key = Object.keys(byStudent).find(k => k === currentStudent || k.endsWith(' ' + currentStudent));
+  return key ? byStudent[key] : (fallback || []);
+}
+
+/** Resolve schoolEvents for currentStudent */
+function resolveSchoolEventsForStudent(byStudent, currentStudent, fallback) {
+  if (!byStudent) return fallback || [];
+  if (currentStudent && byStudent[currentStudent]) return byStudent[currentStudent];
+  if (!currentStudent) return fallback || [];
+  const key = Object.keys(byStudent).find(k => k === currentStudent || k.endsWith(' ' + currentStudent));
+  return key ? byStudent[key] : (fallback || []);
+}
+
+/** Find child config — handles "אמי" vs "גונשרוביץ אמי" */
+function resolveChildConfig(name) {
+  if (!lastChildren?.children?.length) return null;
+  const exact = lastChildren.children.find(c => c.name === name);
+  if (exact) return exact;
+  return lastChildren.children.find(c => c.name.endsWith(' ' + name) || c.name === name);
+}
+
 /**
  * Returns false if the raw class-event text explicitly references a grade
  * that does NOT match the currently selected child's configured grade.
@@ -1617,7 +1654,7 @@ const GRADE_MAP = { 'א': 1, 'ב': 2, 'ג': 3, 'ד': 4, 'ה': 5, 'ו': 6, 'ז': 
  */
 function isEventValidForCurrentChild(raw) {
   if (!currentStudent || !lastChildren?.children?.length) return true;
-  const config = lastChildren.children.find(c => c.name === currentStudent);
+  const config = resolveChildConfig(currentStudent);
   if (!config?.grade) return true;
   const childGrade = GRADE_MAP[config.grade];
   if (!childGrade) return true;
