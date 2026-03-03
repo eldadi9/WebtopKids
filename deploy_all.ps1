@@ -81,7 +81,7 @@ try {
 
   Step 7 "Git push..."
   Write-Host ""
-  $doGit = Read-Host "Do you want to push to Git? (Y/N)"
+  $doGit = if ($SkipGit) { "N" } else { Read-Host "Do you want to push to Git? (Y/N)" }
   if ($doGit -notmatch '^[yY]') {
     Info "Skipping Git. Deploy complete."
   } else {

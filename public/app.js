@@ -932,15 +932,22 @@ function renderApprovals() {
     return;
   }
 
-  container.innerHTML = approvalItems.map(item => `
-    <div class="card type-general">
+  container.innerHTML = approvalItems.map(item => {
+    const id = approvalId(item);
+    const approved = lastStatus[id]?.approved;
+    return `
+    <div class="card type-general${approved ? ' approved-card' : ''}" data-approval-id="${esc(id)}">
       <div class="card-header">
         <span class="card-title">${esc(item.label)}</span>
-        <span class="badge badge-general">✍️ אישור</span>
+        ${approved
+          ? '<span class="badge badge-approved">✓ אושר</span>'
+          : '<span class="badge badge-general">✍️ אישור</span>'}
       </div>
       ${item.date ? `<div class="card-meta">📅 ${esc(item.date)}</div>` : ''}
       ${item.sub  ? `<div class="card-desc">${esc(item.sub)}</div>`  : ''}
-    </div>`).join('');
+      ${!approved ? `<button class="btn-approval-done" data-approval-id="${esc(id)}">✓ אישרתי</button>` : ''}
+    </div>`;
+  }).join('');
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -975,14 +982,14 @@ function renderMessages() {
     ? messages.filter(m => !m.student || m.student === currentStudent)
     : messages;
 
-  // Sort: unread first, then most-recent first
+  const isRead = (m) => m.read || lastStatus[msgId(m)]?.read;
   const sorted = [...filtered].sort((a, b) => {
-    if (!!a.read !== !!b.read) return a.read ? 1 : -1;
+    if (!!isRead(a) !== !!isRead(b)) return isRead(a) ? 1 : -1;
     return dateSortKey(b.date) - dateSortKey(a.date);
   });
 
-  const unread = sorted.filter(m => !m.read);
-  const read   = sorted.filter(m =>  m.read);
+  const unread = sorted.filter(m => !isRead(m));
+  const read   = sorted.filter(m =>  isRead(m));
 
   let html = '';
   if (unread.length) {
@@ -998,7 +1005,7 @@ function renderMessages() {
 }
 
 function msgCard(m) {
-  // Map message fields onto the standard notification shape used by openCardDetail
+  const readStatus = m.read || lastStatus[msgId(m)]?.read;
   const cardObj = {
     type:        'message',
     subject:     m.subject  || '(ללא נושא)',
@@ -1006,8 +1013,9 @@ function msgCard(m) {
     alertDay:    m.from     ? `${m.from}${m.fromRole ? ` · ${m.fromRole}` : ''}` : null,
     date:        m.date     || null,
     alertTime:   m.time     || null,
-    category:    m.read ? 'נקרא ✓' : 'לא נקרא',
+    category:    readStatus ? 'נקרא ✓' : 'לא נקרא',
     description: m.body     || null,
+    _msgRaw:     m,
   };
   const idx  = allocCard(cardObj);
   const meta = [
@@ -1022,11 +1030,11 @@ function msgCard(m) {
     : '';
 
   return `
-    <div class="card type-message${!m.read ? ' msg-unread-card' : ''} clickable-card"
-         data-card-idx="${idx}" data-hw-id="">
+    <div class="card type-message${!readStatus ? ' msg-unread-card' : ''} clickable-card"
+         data-card-idx="${idx}" data-hw-id="" data-msg-id="${esc(msgId(m))}">
       <div class="card-header">
         <span class="card-title">${esc(cardObj.subject)}</span>
-        ${!m.read
+        ${!readStatus
           ? '<span class="badge badge-message">📨 חדש</span>'
           : '<span class="badge badge-message-read">✓ נקרא</span>'}
       </div>
@@ -1052,7 +1060,8 @@ function renderLinks() {
   const BASE = 'https://webtop.smartschool.co.il';
   container.innerHTML = links.map(l => {
     const href = l.href && !l.href.startsWith('http') ? BASE + (l.href.startsWith('/') ? l.href : '/' + l.href) : (l.href || '');
-    const txt = fixSpacingForDisplay(l.text || '');
+    let txt = fixSpacingForDisplay(l.text || '');
+    if (/\s*https?:\/\/\S+/.test(txt)) txt = txt.replace(/\s*https?:\/\/\S+/g, '').trim(); // הסרת URL מתוך הטקסט
     if (!txt || txt.length < 2) return '';
     return `
       <a class="card type-general link-card" href="${esc(href)}" target="_blank" rel="noopener">
@@ -1107,10 +1116,12 @@ function renderFeed(notifications) {
 /* ═══════════════════════════════════════════════════════════════
    MODAL — פרטים מלאים בלחיצה על כרטיס
    ═══════════════════════════════════════════════════════════════ */
-function openCardDetail(n, hwId) {
+function openCardDetail(n, hwId, msgId) {
   const modal   = document.getElementById('detail-modal');
   const content = document.getElementById('modal-content');
   if (!modal || !content || !n) return;
+  const mid = msgId || (n.type === 'message' && n._msgRaw ? msgId(n._msgRaw) : '');
+  if (n.type === 'message' && mid) markMessageRead(mid);
 
   const label   = TYPE_LABEL[n.type] || TYPE_LABEL.general;
   const done    = hwId && lastStatus[hwId]?.done;
@@ -1244,7 +1255,13 @@ function openHomeworkHistory() {
 
 /* ─── Event delegation: card click → open modal ────────────────────────── */
 document.addEventListener('click', e => {
-  // Skip buttons and UI controls
+  // Approval button
+  const approvBtn = e.target.closest('.btn-approval-done');
+  if (approvBtn) {
+    const id = approvBtn.dataset.approvalId;
+    if (id) markApprovalDone(id);
+    return;
+  }
   if (e.target.closest('.btn-done, .modal-close, .child-select, #btn-refresh, .btn-retry, .btn-hw-history')) return;
 
   // Close modal when clicking backdrop
@@ -1255,7 +1272,8 @@ document.addEventListener('click', e => {
   if (!card) return;
   const n    = _cardStore[+card.dataset.cardIdx];
   const hwId = card.dataset.hwId || '';
-  if (n) openCardDetail(n, hwId);
+  const msgId = card.dataset.msgId || '';
+  if (n) openCardDetail(n, hwId, msgId);
 });
 
 // Close modal on Escape
@@ -1273,6 +1291,34 @@ function handleMarkDone(btn) {
     alertDay:    btn.dataset.alertDay,
     description: btn.dataset.description,
   });
+}
+
+async function markMessageRead(id) {
+  try {
+    const res = await fetch('/api/messages/read', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const j = await res.json();
+    if (j.ok) {
+      lastStatus[id] = { read: true };
+      rerender();
+    }
+  } catch (e) { console.warn('markMessageRead:', e); }
+}
+
+async function markApprovalDone(id) {
+  try {
+    const res = await fetch('/api/approval/done', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const j = await res.json();
+    if (j.ok) {
+      lastStatus[id] = { approved: true };
+      rerender();
+    }
+  } catch (e) { console.warn('markApprovalDone:', e); }
 }
 
 async function markDone(id, homeworkText, studentName, btn, extra = {}) {
@@ -1544,6 +1590,14 @@ function esc(str) {
 function homeworkId(n) {
   return `${n.subject || ''}_${n.date || ''}_${n.lesson || ''}`;
 }
+function msgId(m) {
+  const s = `${m.from || ''}|${m.date || ''}|${(m.subject || '').slice(0, 50)}`;
+  return 'msg_' + s.replace(/[^a-zA-Z0-9\u0590-\u05FF|_\-\/\.]/g, '_');
+}
+function approvalId(item) {
+  const s = `${item.label || ''}|${item.sub || ''}|${item.date || ''}`;
+  return 'approval_' + s.replace(/[^a-zA-Z0-9\u0590-\u05FF|_\-\/\.]/g, '_').slice(0, 80);
+}
 function dateSortKey(dateStr) {
   if (!dateStr) return 0;
   const [d, m, y] = dateStr.split('/');
@@ -1578,8 +1632,8 @@ function initTheme() {
   if (btn) btn.addEventListener('click', toggleTheme);
 }
 
-/* ─── Auto-refresh every 15 min + init ─────────────────────────────────── */
-setInterval(fetchAll, 15 * 60 * 1000);
+/* ─── Auto-refresh every 5 min + init ─────────────────────────────────── */
+setInterval(fetchAll, 5 * 60 * 1000);
 initTheme();
 initPhotoUpload();
 fetchAll();

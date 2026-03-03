@@ -34,11 +34,12 @@ const BASE_URL      = "https://webtop.smartschool.co.il";
 const DASHBOARD_URL = `${BASE_URL}/dashboard`;
 const PROFILE_DIR   = resolve(process.env.WEBTOP_PROFILE || ".webtop_profile");
 const TIMEOUT       = 25_000;
+const HEADLESS      = process.env.WEBTOP_HEADLESS !== "false";
 const sleep         = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function main() {
   const context = await chromium.launchPersistentContext(PROFILE_DIR, {
-    headless: false,
+    headless: HEADLESS,
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled"],
     userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0",
     locale: "he-IL",
@@ -47,36 +48,63 @@ async function main() {
   const page = await context.newPage();
   page.setDefaultTimeout(TIMEOUT);
 
-  await page.goto(DASHBOARD_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
-  await sleep(2000);
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await page.goto(DASHBOARD_URL, { waitUntil: "networkidle", timeout: TIMEOUT });
+  await sleep(5000);
 
   const needsLogin = page.url().includes("/account/login") || page.url().includes("/login");
   if (needsLogin) {
-    console.log("\n>>> צריך התחברות. התחבר ידנית ואז לחץ Enter...");
-    await page.waitForSelector("body", { timeout: 600_000 });
-    await page.goto(DASHBOARD_URL, { waitUntil: "networkidle", timeout: TIMEOUT });
-    await sleep(2000);
+    console.log("\n>>> צריך התחברות. הרץ עם WEBTOP_HEADLESS=false להתחברות ידנית.");
+    await context.close();
+    process.exit(1);
   }
+
+  // פתח תפריט צד אם סגור (המבורגר)
+  try {
+    const menuBtn = page.locator("button[aria-label*='menu'], button[aria-label*='Menu'], .mat-mdc-icon-button, [class*='menu-toggle']").first();
+    if (await menuBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await menuBtn.click();
+      await sleep(2000);
+    }
+  } catch (_) {}
+
+  await page.waitForSelector("a[href]", { timeout: 10000 }).catch(() => null);
 
   const discovery = { pages: [], dashboard: null };
 
-  // 1. שלב ראשון — מצא את כל הלינקים בתפריט הצד
-  const sidebarLinks = await page.evaluate(() => {
+  // 1. שלב ראשון — מצא את כל הלינקים (תפריט צד + קיצורי דרך)
+  let sidebarLinks = await page.evaluate(() => {
     const links = [];
     const seen = new Set();
-    for (const a of document.querySelectorAll("a[href], mat-nav-list a, nav a, [role='navigation'] a, .sidenav a, mat-sidenav a")) {
+    for (const a of document.querySelectorAll("a[href], mat-nav-list a, nav a, [role='navigation'] a, .sidenav a, mat-sidenav a, mat-sidenav-container a")) {
       const text = (a.textContent || "").trim().replace(/\s+/g, " ");
       const href = a.getAttribute("href") || "";
-      if (text.length > 1 && text.length < 80 && !seen.has(text)) {
+      if (text.length > 1 && text.length < 80 && !seen.has(text) && !/^\d+$/.test(text)) {
         seen.add(text);
         links.push({ text, href: href.startsWith("/") ? href : (href.startsWith("http") ? href : "/" + href) });
       }
     }
     return links;
   });
+  if (sidebarLinks.length === 0) {
+    const allLinks = await page.evaluate(() => {
+      const links = [];
+      const seen = new Set();
+      for (const a of document.querySelectorAll("a[href]")) {
+        const text = (a.textContent || "").trim().replace(/\s+/g, " ").slice(0, 60);
+        const href = (a.getAttribute("href") || "").trim();
+        if (text.length > 2 && text.length < 70 && href && !seen.has(text + href) && !/תפריט ראשי|הגדרות|יציאה|^\d+$/.test(text)) {
+          seen.add(text + href);
+          links.push({ text, href: href.startsWith("/") ? href : (href.startsWith("http") ? href : "/" + href) });
+        }
+      }
+      return links;
+    });
+    sidebarLinks = allLinks;
+  }
 
   discovery.sidebarLinks = sidebarLinks.filter((l) => !/תפריט ראשי|הגדרות|יציאה/.test(l.text));
-  console.log("\n[סריקה] נמצאו לינקים בתפריט:", discovery.sidebarLinks.map((l) => l.text).join(", "));
+  process.stderr.write(`[סריקה] נמצאו לינקים בתפריט: ${discovery.sidebarLinks.map((l) => l.text).join(", ")}\n`);
 
   // 2. חלץ דשבורד ראשי
   const dash = await page.evaluate(() => {
@@ -122,7 +150,7 @@ async function main() {
       }, link.text);
 
       discovery.pages.push({ link: link.text, url: page.url(), ...content });
-      console.log(`[סריקה] ${link.text}: ${content.headings.length} כותרות, ${content.tables.length} טבלאות`);
+      process.stderr.write(`[סריקה] ${link.text}: ${content.headings.length} כותרות, ${content.tables.length} טבלאות\n`);
     } catch (e) {
       console.warn(`[סריקה] שגיאה ב-${link.text}:`, e.message);
       discovery.pages.push({ link: link.text, error: e.message });

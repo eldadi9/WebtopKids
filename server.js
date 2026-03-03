@@ -321,6 +321,11 @@ app.post('/api/push', async (req, res) => {
       return res.status(403).json({ ok: false, error: 'Unauthorized' });
     }
     if (!data) return res.status(400).json({ ok: false, error: 'missing data' });
+    const links = data?.data?.usefulLinks || [];
+    if (links.some(l => (l.href || '').includes('forgotPassword'))) {
+      console.warn('[push] Rejected: data looks like login page (forgotPassword in links)');
+      return res.status(400).json({ ok: false, error: 'Invalid data — login page detected. Run WEBTOP_CAPTURE=true to re-login.' });
+    }
 
     // Capture previous IDs BEFORE updating cache
     const prevIds = new Set((cache.data?.data?.notifications || []).map(notifId));
@@ -367,8 +372,12 @@ app.post('/api/push', async (req, res) => {
   }
 });
 
-// GET /api/data — serve from cache
+// GET /api/data — serve from cache; ?refresh=1 sets trigger for home machine
 app.get('/api/data', (req, res) => {
+  if (req.query.refresh === '1') {
+    triggerPending = true;
+    triggerRequestedAt = new Date().toISOString();
+  }
   if (cache.data) {
     const cacheAge = Math.round((Date.now() - cache.timestamp) / 1000);
     const stale    = cacheAge > 30 * 60; // stale after 30 min
@@ -383,6 +392,27 @@ app.get('/api/data', (req, res) => {
 
 // GET /api/status — homework done/undone map
 app.get('/api/status', (req, res) => { res.json(loadStatus()); });
+
+// GET /api/status/system — system health (what works, what needs fix)
+app.get('/api/status/system', (req, res) => {
+  const cacheAge = cache.data ? Math.round((Date.now() - cache.timestamp) / 1000) : null;
+  const notifCount = cache.data?.data?.notifications?.length ?? 0;
+  const linkCount = cache.data?.data?.usefulLinks?.length ?? 0;
+  const hasValidLinks = linkCount > 0 && !(cache.data?.data?.usefulLinks || []).some(l => (l.href || '').includes('forgotPassword'));
+  res.json({
+    ok: true,
+    cacheAge,
+    cacheAgeMin: cacheAge != null ? Math.round(cacheAge / 60) : null,
+    stale: cacheAge != null && cacheAge > 30 * 60,
+    notifCount,
+    linkCount,
+    dataValid: hasValidLinks && notifCount >= 0,
+    triggerPending,
+    message: !cache.data
+      ? 'אין נתונים — הרץ fresh_pull או start_daemon במחשב הבית'
+      : hasValidLinks ? 'המערכת פעילה' : 'הנתונים נראים לא תקינים (דף התחברות?) — הרץ WEBTOP_CAPTURE=true',
+  });
+});
 
 // GET /api/events — special events (birthdays, parent meetings)
 app.get('/api/events', (req, res) => { res.json(loadSpecialEvents()); });
@@ -511,6 +541,26 @@ app.post('/api/homework/done', async (req, res) => {
 
   await sendTelegram(lines);
   res.json({ ok: true, id, done: true });
+});
+
+// POST /api/approval/done — mark approval as "אישרתי" (local status only)
+app.post('/api/approval/done', (req, res) => {
+  const { id } = req.body || {};
+  if (!id) return res.status(400).json({ ok: false, error: 'missing id' });
+  const status = loadStatus();
+  status[id] = { approved: true, at: new Date().toISOString() };
+  saveStatus(status);
+  res.json({ ok: true, id, approved: true });
+});
+
+// POST /api/messages/read — mark message as read when user opens it
+app.post('/api/messages/read', (req, res) => {
+  const { id } = req.body || {};
+  if (!id) return res.status(400).json({ ok: false, error: 'missing id' });
+  const status = loadStatus();
+  status[id] = { read: true, at: new Date().toISOString() };
+  saveStatus(status);
+  res.json({ ok: true, id, read: true });
 });
 
 // POST /api/homework/undone — unmark (re-enables future reminders)

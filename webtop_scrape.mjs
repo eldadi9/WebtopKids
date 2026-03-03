@@ -167,60 +167,70 @@ function isRealNotification(n, raw) {
 }
 
 // ── Student switcher helpers ───────────────────────────────────────────────
+// Known non-student option texts (language selector etc.)
+const NON_STUDENT_OPTS = /עברית|English|عربيه|Русский|Pусский|ናይ|ትግርኛ|Українська|forgot|שכחתי/i;
+
 // Detects all students from the mat-select dropdown in the portal nav.
 // Returns an array of student name strings, or null if only one student
-// (or if no mat-select is found).
+// (or if no mat-select is found). Skips language selectors.
 async function getAllStudents(page) {
-  const matSelect = page.locator("mat-select").first();
-  if ((await matSelect.count()) === 0) return null;
-
-  await matSelect.click();
-  await sleep(800);
-
-  // Options are rendered in an overlay appended to body
-  const opts = page.locator("mat-option");
-  await opts.first().waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
-  const names = (await opts.allTextContents()).map((t) => t.trim()).filter(Boolean);
-
-  // Close dropdown
-  await page.keyboard.press("Escape");
-  await sleep(400);
-
-  return names.length > 1 ? names : null;
+  const selects = await page.locator("mat-select").all();
+  for (const matSelect of selects) {
+    await matSelect.click();
+    await sleep(800);
+    const opts = page.locator(".mat-mdc-select-panel mat-option, mat-option");
+    const ok = await opts.first().waitFor({ state: "visible", timeout: 3000 }).then(() => true).catch(() => false);
+    if (ok) {
+      const names = (await opts.allTextContents()).map((t) => t.trim()).filter(Boolean);
+      await page.keyboard.press("Escape");
+      await sleep(400);
+      const looksLikeStudents = names.length >= 1 && names.every(n => !NON_STUDENT_OPTS.test(n));
+      if (looksLikeStudents && names.length > 1) return names;
+    } else {
+      await page.keyboard.press("Escape");
+    }
+  }
+  return null;
 }
 
 // Switches the portal to show data for a different student.
-// Must be called while on the dashboard page.
+// Tries each mat-select until finding one with matching student option (skips language selector).
 async function switchToStudent(page, name) {
   if (!page.url().includes("/dashboard")) {
     await page.goto(DASHBOARD_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
     await sleep(800);
   }
 
-  const matSelect = page.locator("mat-select").first();
-  await matSelect.click();
-  await sleep(800);
-
-  // Find matching option — exact text match first, fallback to contains
-  const opts = page.locator("mat-option");
-  await opts.first().waitFor({ state: "visible", timeout: 5000 });
-  const allOpts = await opts.all();
-  let clicked = false;
-  for (const opt of allOpts) {
-    const text = (await opt.textContent() || "").trim();
-    if (text === name) {
-      await opt.click();
-      clicked = true;
-      break;
+  const selects = await page.locator("mat-select").all();
+  for (const matSelect of selects) {
+    await matSelect.click();
+    await sleep(1200);
+    const opts = page.locator(".mat-mdc-select-panel mat-option, mat-option");
+    const ok = await opts.first().waitFor({ state: "visible", timeout: 3000 }).then(() => true).catch(() => false);
+    if (!ok) {
+      await page.keyboard.press("Escape");
+      await sleep(400);
+      continue;
     }
+    const allOpts = await opts.all();
+    let clicked = false;
+    for (const opt of allOpts) {
+      const text = (await opt.textContent() || "").trim().replace(/\s+/g, " ");
+      if (NON_STUDENT_OPTS.test(text)) continue;
+      if (text === name || text.includes(name)) {
+        await opt.click();
+        clicked = true;
+        break;
+      }
+    }
+    if (clicked) {
+      await page.waitForLoadState("networkidle", { timeout: TIMEOUT });
+      await sleep(1000);
+      return;
+    }
+    await page.keyboard.press("Escape");
+    await sleep(400);
   }
-  if (!clicked) {
-    // fallback: partial match
-    await page.locator("mat-option").filter({ hasText: name }).first().click();
-  }
-
-  await page.waitForLoadState("networkidle", { timeout: TIMEOUT });
-  await sleep(1000);
 }
 
 // ── Login ─────────────────────────────────────────────────────────────────────
@@ -268,10 +278,8 @@ async function doLogin(page) {
     process.stderr.write('Warning: submit button still disabled after 45s, attempting click anyway\n');
   });
 
-  await Promise.all([
-    page.waitForURL(/dashboard/, { timeout: TIMEOUT }),
-    submitBtn.click(),
-  ]);
+  submitBtn.click();
+  await page.waitForURL(/dashboard/, { timeout: 60000 });
 }
 
 // ── Dashboard extraction ──────────────────────────────────────────────────────
@@ -367,7 +375,8 @@ async function extractDashboard(page) {
     }
     result.studentName = studentName;
 
-    // ── Useful links (קיצורי דרך) ──
+    // ── Useful links: קיצורי דרך + כרטיסים + תפריט צד + כל קישור רלוונטי ──
+    let usefulLinks = [];
     const allHeadings = Array.from(document.querySelectorAll(
       "h2, h3, h4, h5, [class*='title'], [class*='header'], [class*='heading'], strong, span"
     ));
@@ -375,12 +384,38 @@ async function extractDashboard(page) {
     if (shortcutArea) {
       const card = shortcutArea.closest("[class*='card'], [class*='panel'], mat-card, div");
       if (card) {
-        result.usefulLinks = Array.from(card.querySelectorAll("a[href]")).map(a => ({
+        usefulLinks = Array.from(card.querySelectorAll("a[href]")).map(a => ({
           text: a.textContent.trim().replace(/\s+/g, " ").slice(0, 80),
           href: a.getAttribute("href") || "",
         })).filter(l => l.text.length > 1 && l.text.length < 60);
       }
     }
+    // קישורים מכרטיסי תוכן (ציונים, שיעורי בית וכו') — לא רק קיצורי דרך
+    const contentCards = document.querySelectorAll("[class*='card'] a[href], mat-card a[href], [class*='panel'] a[href]");
+    for (const a of contentCards) {
+      const text = (a.textContent || "").trim().replace(/\s+/g, " ").slice(0, 80);
+      let href = (a.getAttribute("href") || "").trim();
+      if (text.length >= 2 && text.length < 70 && href && !/^\s*#/.test(href)) {
+        if (!href.startsWith("http")) href = href.startsWith("/") ? href : "/" + href;
+        usefulLinks.push({ text, href });
+      }
+    }
+
+    // ── Sidebar + כל קישור רלוונטי (תפריט צד, אתרים חיצוניים) ──
+    const seen = new Set();
+    for (const a of document.querySelectorAll("a[href], mat-nav-list a, nav a, [role='navigation'] a, mat-sidenav a, .sidenav a")) {
+      const text = (a.textContent || "").trim().replace(/\s+/g, " ");
+      let href = (a.getAttribute("href") || "").trim();
+      if (!href || text.length < 2 || text.length > 70) continue;
+      if (/תפריט ראשי|הגדרות|יציאה|^\d+$/.test(text)) continue;
+      const key = text + "|" + href;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (href.startsWith("/")) href = href;
+      else if (!href.startsWith("http")) href = "/" + href;
+      usefulLinks.push({ text, href });
+    }
+    result.usefulLinks = usefulLinks;
 
     // ── Debug: capture all heading texts found on page ──
     result._headingsFound = Array.from(
@@ -420,6 +455,38 @@ async function extractSchoolEvents(page) {
     if (process.env.WEBTOP_DEBUG === "1") process.stderr.write(`[debug] extractSchoolEvents: ${e.message}\n`);
   }
   return events;
+}
+
+// ── External sites links (אתרים מותאמים) — קישורים חיצוניים מהדף ─────────
+async function extractExternalSitesLinks(page) {
+  const links = [];
+  try {
+    await page.goto(`${BASE_URL}/externalSites`, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+    await sleep(1200);
+    const items = await page.evaluate(() => {
+      const found = [];
+      const seen = new Set();
+      for (const a of document.querySelectorAll("a[href]")) {
+        let href = (a.getAttribute("href") || "").trim();
+        const text = (a.textContent || "").trim().replace(/\s+/g, " ").slice(0, 80);
+        if (!href || text.length < 2 || text.length > 70) continue;
+        if (/תפריט|הגדרות|יציאה|^\d+$/.test(text)) continue;
+        const key = text + "|" + href;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (href.startsWith("/")) href = href;
+        else if (!href.startsWith("http")) href = "/" + href;
+        found.push({ text, href });
+      }
+      return found;
+    });
+    for (const l of items) {
+      if (l.text && l.href) links.push(l);
+    }
+  } catch (e) {
+    if (process.env.WEBTOP_DEBUG === "1") process.stderr.write(`[debug] extractExternalSitesLinks: ${e.message}\n`);
+  }
+  return links;
 }
 
 // ── Signoffs (חתימות ואישורים) ────────────────────────────────────────────
@@ -570,10 +637,11 @@ async function extractMessages(page) {
 
   const page = await context.newPage();
   page.setDefaultTimeout(TIMEOUT);
+  await page.setViewportSize({ width: 1400, height: 900 });
 
   // ── Try to go directly to dashboard ───────────────────────────────────────
-  await page.goto(DASHBOARD_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
-  await sleep(1000);
+  await page.goto(DASHBOARD_URL, { waitUntil: "networkidle", timeout: TIMEOUT });
+  await sleep(3000);
 
   // ── Check if we're logged in (redirected to login = not logged in) ─────────
   const currentUrl = page.url();
@@ -599,6 +667,41 @@ async function extractMessages(page) {
     await page.goto(DASHBOARD_URL, { waitUntil: "networkidle", timeout: TIMEOUT });
     await sleep(800);
   }
+  // סגור overlays, המתן לתוכן ראשי
+  for (let i = 0; i < 5; i++) {
+    await page.keyboard.press("Escape");
+    await sleep(400);
+  }
+  await sleep(3000);
+  await page.evaluate(() => window.scrollTo(0, 400));
+  await sleep(2000);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await sleep(1500);
+  await page.getByText("קיצורי דרך", { exact: false }).first().waitFor({ state: "visible", timeout: 20000 }).catch(() => null);
+  await sleep(2000);
+  // בחר עברית אם הדף מציג שפה זרה — חיפוש mat-select שמכיל עברית
+  try {
+    const hasHebrew = await page.evaluate(() => {
+      const t = (document.body?.innerText || "").slice(0, 3000);
+      return /ריכוז|קיצורי|תלמיד|שיעור|התראות/.test(t);
+    });
+    if (!hasHebrew) {
+      for (const sel of await page.locator("mat-select").all()) {
+        await page.keyboard.press("Escape");
+        await sleep(300);
+        await sel.click();
+        await sleep(800);
+        const heb = page.locator("mat-option").filter({ hasText: "עברית" }).first();
+        if (await heb.isVisible({ timeout: 1500 }).catch(() => false)) {
+          await heb.click();
+          await sleep(3500);
+          await page.goto(DASHBOARD_URL, { waitUntil: "networkidle", timeout: TIMEOUT });
+          break;
+        }
+        await page.keyboard.press("Escape");
+      }
+    }
+  } catch (_) {}
 
   // ── Detect all available students from portal switcher ────────────────────
   let studentList = await getAllStudents(page).catch((e) => {
@@ -630,7 +733,13 @@ async function extractMessages(page) {
 
     // Switch portal to this student (skip for single-student accounts)
     if (studentName !== null) {
-      await switchToStudent(page, studentName);
+      try {
+        await switchToStudent(page, studentName);
+      } catch (e) {
+        process.stderr.write(`[warn] switchToStudent("${studentName}") failed: ${e.message?.slice(0, 80)} — continuing with current student\n`);
+        await page.goto(DASHBOARD_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+        await sleep(1000);
+      }
     }
 
     // Extract dashboard card data (classEvents, homework, grades, …)
@@ -666,6 +775,15 @@ async function extractMessages(page) {
     }
   }
 
+  // ── Deduplicate notifications (same content from multiple students) ───────
+  const notifKey = (n) => `${n.type}_${n.student}_${n.subject}_${n.date}_${n.lesson}`;
+  const seenNotifs = new Map();
+  for (const n of allNotifications) {
+    const k = notifKey(n);
+    if (!seenNotifs.has(k)) seenNotifs.set(k, n);
+  }
+  allNotifications = Array.from(seenNotifs.values());
+
   // ── Single-student fallback: map classEvents to detected student name ──────
   if (!studentList || studentList.length <= 1) {
     mainDashboard = mainDashboard || {};
@@ -683,7 +801,18 @@ async function extractMessages(page) {
   // ── Extract school events, signoffs, useful links ───────────────────────────
   const schoolEvents  = await extractSchoolEvents(page).catch(() => []);
   const signoffs      = await extractSignoffs(page).catch(() => []);
-  const usefulLinks   = mainDashboard?.usefulLinks || [];
+  const externalLinks = await extractExternalSitesLinks(page).catch(() => []);
+  // Merge dashboard links + external sites, dedupe by text|href
+  const baseLinks = mainDashboard?.usefulLinks || [];
+  const seen = new Map();
+  const isNoise = (t) => !t || t.length < 3 || /^\d+$/.test(t) || /^\s*\d+\s*$/.test(t);
+  for (const l of [...baseLinks, ...externalLinks]) {
+    const text = (l.text || "").trim();
+    if (isNoise(text) || !l.href) continue;
+    const key = text + "|" + (l.href || "");
+    if (!seen.has(key)) seen.set(key, { ...l, text });
+  }
+  const usefulLinks = Array.from(seen.values());
 
   await context.close();
 
