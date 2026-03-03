@@ -146,13 +146,14 @@ async function sendTelegram(text) {
 
 // ─── New-alert Telegram sender ────────────────────────────────────────────────
 // Fires IMMEDIATELY when a push arrives with notifications not seen before.
-// Covers: late, absence, missing_equipment, grade, homework_not_done
+// Covers: late, absence, missing_equipment, grade, homework_not_done, homework
 const ALERT_EMOJI = {
   late:              '⏰',
   absence:           '🚫',
   missing_equipment: '🎒',
   grade:             '⭐',
   homework_not_done: '📚',
+  homework:          '📚',
 };
 const ALERT_NAME = {
   late:              'איחור',
@@ -160,9 +161,10 @@ const ALERT_NAME = {
   missing_equipment: 'ציוד חסר',
   grade:             'ציון חדש',
   homework_not_done: 'שיעורי בית לא הוכנו',
+  homework:          'שיעורי בית חדשים',
 };
 const ALERT_TYPES_SET = new Set([
-  'late', 'absence', 'missing_equipment', 'grade', 'homework_not_done',
+  'late', 'absence', 'missing_equipment', 'grade', 'homework_not_done', 'homework',
 ]);
 
 async function sendNewAlerts(newNotifications, prevIds) {
@@ -215,15 +217,22 @@ async function sendNewAlerts(newNotifications, prevIds) {
       lines.push(`📋 ${n.description.slice(0, 200)}`);
     }
 
+    // Homework: include task details (homeworkText / description)
+    if (n.type === 'homework') {
+      if (n.homeworkText) lines.push(`📝 מטלה: ${n.homeworkText.slice(0, 200)}`);
+      else if (n.description) lines.push(`📋 ${n.description.slice(0, 200)}`);
+    }
+
     await sendTelegram(lines.filter(Boolean).join('\n'));
     console.log(`[alert] Sent Telegram for new ${n.type}: ${n.subject} / ${n.student}`);
   }
 }
 
 // ─── Deadline reminder checker ─────────────────────────────────────────────────
-// Two tiers:
-//   Tier 1 (key: id_1d) → due within 24h   → 🟠 urgent
-//   Tier 2 (key: id_3d) → due within 1–3d  → 🟡 early warning
+// homework reminders (3 tiers):
+//   Alert 1: immediate when new (via sendNewAlerts)
+//   Tier 2d (key: id_2d) → 2 days before due  → 🟡 early warning
+//   Tier 1d (key: id_1d) → 1 day before due   → 🟠 "מחר חייבים להגיש"
 // Called both at push time AND every hour.
 async function checkDeadlines() {
   if (!cache.data?.data?.notifications) return;
@@ -241,37 +250,36 @@ async function checkDeadlines() {
     const daysLeft = (hwDate - now) / (1000 * 60 * 60 * 24);
     if (daysLeft <= 0) continue; // past due, skip
 
-    // ── Tier 1: due within 24 hours ──────────────────────────────────────────
-    if (daysLeft <= 1 && !sentReminders.has(`${id}_1d`)) {
-      sentReminders.add(`${id}_1d`);
+    // ── Tier 2d: 2 days before due date ───────────────────────────────────────
+    if (daysLeft >= 2 && daysLeft < 3 && !sentReminders.has(`${id}_2d`)) {
+      sentReminders.add(`${id}_2d`);
       saveSentReminders();
-      const urgency = daysLeft <= 0.5 ? '🔴 היום!!' : '🟠 מחר!!';
       await sendTelegram([
-        `⏰ <b>תזכורת דחופה — שיעורי בית!</b>`,
+        `🟡 <b>תזכורת — שיעורי בית</b>`,
         ``,
         `📚 מקצוע: <b>${n.subject || '?'}</b>`,
         `👧 תלמיד/ה: <b>${n.student || '?'}</b>`,
-        `📅 מועד הגשה: ${n.date} — ${urgency}`,
+        `📅 מועד הגשה: ${n.date} — עוד <b>יומיים</b>`,
         n.homeworkText ? `📝 מטלה: ${n.homeworkText}` : '',
-        `⚠️ לא סומן כהושלם עדיין!`,
       ].filter(Boolean).join('\n'));
-      console.log(`[deadline] Sent 24h reminder: ${n.subject} / ${n.student}`);
+      console.log(`[deadline] Sent 2d reminder: ${n.subject} / ${n.student}`);
     }
 
-    // ── Tier 2: 1–3 days in advance ──────────────────────────────────────────
-    else if (daysLeft > 1 && daysLeft <= 3 && !sentReminders.has(`${id}_3d`)) {
-      sentReminders.add(`${id}_3d`);
+    // ── Tier 1d: 1 day before — "מחר חייבים להגיש" ───────────────────────────
+    else if (daysLeft >= 1 && daysLeft < 2 && !sentReminders.has(`${id}_1d`)) {
+      sentReminders.add(`${id}_1d`);
       saveSentReminders();
-      const daysNum = Math.ceil(daysLeft);
       await sendTelegram([
-        `🟡 <b>תזכורת מוקדמת — שיעורי בית</b>`,
+        `🟠 <b>תזכורת דחופה — שיעורי בית!</b>`,
+        ``,
+        `⚠️ <b>מחר חייבים להגיש!</b>`,
         ``,
         `📚 מקצוע: <b>${n.subject || '?'}</b>`,
         `👧 תלמיד/ה: <b>${n.student || '?'}</b>`,
-        `📅 מועד הגשה: ${n.date} — עוד <b>${daysNum} ימים</b>`,
+        `📅 מועד הגשה: ${n.date}`,
         n.homeworkText ? `📝 מטלה: ${n.homeworkText}` : '',
       ].filter(Boolean).join('\n'));
-      console.log(`[deadline] Sent ${daysNum}d advance reminder: ${n.subject} / ${n.student}`);
+      console.log(`[deadline] Sent 1d reminder (מחר חייבים להגיש): ${n.subject} / ${n.student}`);
     }
   }
 }
@@ -527,7 +535,7 @@ app.post('/api/homework/done', async (req, res) => {
 
   // Mark both reminder tiers as sent so no future reminder fires for this item
   sentReminders.add(`${id}_1d`);
-  sentReminders.add(`${id}_3d`);
+  sentReminders.add(`${id}_2d`);
   saveSentReminders();
 
   const descTrimmed = (description || '').trim();
@@ -581,7 +589,7 @@ app.post('/api/homework/undone', (req, res) => {
   delete status[id];
   saveStatus(status);
   sentReminders.delete(`${id}_1d`);
-  sentReminders.delete(`${id}_3d`);
+  sentReminders.delete(`${id}_2d`);
   saveSentReminders();
   res.json({ ok: true, id, done: false });
 });
