@@ -442,6 +442,16 @@ body.theme-light .stab:hover { background: rgba(0,0,0,0.06); }
 .card.type-grade             { --card-color: var(--c-grade);       background: var(--c-grade-bg); }
 .card.type-general           { --card-color: var(--c-general);     background: var(--c-general-bg); }
 
+/* Link cards (קישורים) ── */
+a.link-card {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  --card-color: #3b82f6;
+  cursor: pointer;
+}
+a.link-card:hover { opacity: 0.9; }
+
 .card.done-card { opacity: 0.45; }
 .card.done-card:hover { transform: none; }
 

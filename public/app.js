@@ -23,6 +23,27 @@ let ptrStartY  = 0;
 let ptrPulling = false;
 const PTR_THRESHOLD = 70;
 
+/* ─── Fix spacing in displayed text (אתר מוציא מילים מחוברות) ────────────── */
+function fixSpacingForDisplay(str) {
+  if (!str || typeof str !== 'string') return str;
+  return str
+    .replace(/חיסוריום/g, 'חיסור יום')
+    .replace(/איחוריום/g, 'איחור יום')
+    .replace(/מילהטובה/g, 'מילה טובה')
+    .replace(/מילה\s*טובהיום/g, 'מילה טובה יום')
+    .replace(/חוסרציוד/g, 'חוסר ציוד')
+    .replace(/לימודיום/g, 'לימודי יום')
+    .replace(/שיעוריום/g, 'שיעורי יום')
+    .replace(/ביתיום/g, 'ביית יום')
+    .replace(/תפריטראשי/g, 'תפריט ראשי')
+    .replace(/ריכוזמידע/g, 'ריכוז מידע')
+    .replace(/תיבתהודעות/g, 'תיבת הודעות')
+    .replace(/כרטיסנתלמיד/g, 'כרטיס תלמיד')
+    .replace(/חתימותואישורים/g, 'חתימות ואישורים')
+    .replace(/מ\.?\s*שעותושינויים/g, 'מ. שעות ושינויים')
+    .replace(/ספרטלפונים/g, 'ספר טלפונים');
+}
+
 /* ─── Type labels & icons ──────────────────────────────────────────────── */
 const TYPE_LABEL = {
   homework:          '📚 שיעורי בית',
@@ -146,9 +167,19 @@ function rerender() {
   renderAlerts(visible);
   renderGrades(visible);
   renderClassEvents(classEvents);
-  renderCalendar(visible, classEvents, lastEvents);
+  (() => {
+    const schoolEvents = lastData?.data?.schoolEvents || [];
+    const mergedEvents = [...lastEvents];
+    const today = new Date();
+    const todayStr = `${String(today.getDate()).padStart(2,'0')}/${String(today.getMonth()+1).padStart(2,'0')}/${today.getFullYear()}`;
+    for (const se of schoolEvents) {
+      mergedEvents.push({ name: se.name, type: se.type || 'event', date: todayStr, details: se.details || '', emoji: '🏫' });
+    }
+    renderCalendar(visible, classEvents, mergedEvents);
+  })();
   renderApprovals();
   renderMessages();
+  renderLinks();
   renderFeed(visible);
   updateTabCounts(visible, classEvents);
 }
@@ -182,6 +213,8 @@ function updateTabCounts(notifications, classEvents) {
   setTab('tab-calendar',  '📅', 'יומן',        calItems);
   setTab('tab-approvals', '✍️', 'אישורים',     approvals);
   setTab('tab-messages',  '📨', 'הודעות',      msgs);
+  const linksCount = (lastData?.data?.usefulLinks || []).length;
+  setTab('tab-links',     '🔗', 'קישורים',     linksCount);
 }
 
 /* ─── Student switcher (dropdown) ─────────────────────────────────────── */
@@ -596,13 +629,13 @@ function renderAlerts(notifications) {
 function alertCard(n) {
   const idx   = allocCard(n);
   const label = TYPE_LABEL[n.type] || TYPE_LABEL.general;
-  const meta  = [
+  const meta  = fixSpacingForDisplay([
     n.alertDay || n.date,
     n.lesson   ? `שיעור ${n.lesson}` : null,
     n.student  ? `👤 ${n.student}`  : null,
-  ].filter(Boolean).join(' | ');
+  ].filter(Boolean).join(' | '));
   const preview = n.description
-    ? n.description.slice(0, 100) + (n.description.length > 100 ? '...' : '')
+    ? fixSpacingForDisplay(n.description).slice(0, 100) + (n.description.length > 100 ? '...' : '')
     : '';
 
   return `
@@ -612,8 +645,8 @@ function alertCard(n) {
         <span class="card-title">${esc(n.subject || '?')}</span>
         <span class="badge badge-${n.type || 'general'}">${label}</span>
       </div>
-      <div class="card-meta">${esc(meta)}</div>
-      ${preview ? `<div class="card-desc">${esc(preview)}</div>` : ''}
+        <div class="card-meta">${esc(meta)}</div>
+        ${preview ? `<div class="card-desc">${esc(preview)}</div>` : ''}
       <div class="card-expand-hint">לחץ לפרטים נוספים ›</div>
     </div>`;
 }
@@ -634,11 +667,11 @@ function renderGrades(notifications) {
 
   container.innerHTML = items.map(n => {
     const idx   = allocCard(n);
-    const meta  = [
+    const meta  = fixSpacingForDisplay([
       n.alertDay || n.date,
       n.lesson   ? `שיעור ${n.lesson}` : null,
       n.student  ? `👤 ${n.student}`   : null,
-    ].filter(Boolean).join(' | ');
+    ].filter(Boolean).join(' | '));
 
     // Extract grade number from description (e.g. "ציון 95 במבחן")
     const gradeMatch = (n.description || '').match(/ציון\s+(\d+)/);
@@ -656,7 +689,7 @@ function renderGrades(notifications) {
           <span class="badge badge-grade">🏅 ציון</span>
         </div>
         <div class="card-meta">${esc(meta)}</div>
-        ${n.description ? `<div class="hw-text">${esc(n.description)}</div>` : ''}
+        ${n.description ? `<div class="hw-text">${esc(fixSpacingForDisplay(n.description))}</div>` : ''}
         <div class="card-expand-hint">לחץ לפרטים נוספים ›</div>
       </div>`;
   }).join('');
@@ -676,6 +709,7 @@ function renderClassEvents(classEvents) {
   }
 
   container.innerHTML = real.map(raw => {
+    raw = fixSpacingForDisplay(raw);
     let type = 'general';
     if      (raw.includes('חוסר ציוד'))                                type = 'missing_equipment';
     else if (raw.includes('אי הכנת שיעורי'))                           type = 'homework_not_done';
@@ -868,7 +902,13 @@ function renderApprovals() {
     }
   }
 
-  // 2. Any approval-type notifications from the scraper
+  // 2. Signoffs from scraper (חתימות ואישורים)
+  for (const s of (lastData?.data?.signoffs || [])) {
+    const txt = (s.details || '').trim();
+    if (txt.length > 15) approvalItems.push({ label: fixSpacingForDisplay(txt).slice(0, 60), sub: txt, date: '', type: 'signoff' });
+  }
+
+  // 3. Any approval-type notifications from the scraper
   for (const n of notifications) {
     if (n.type !== 'approval') continue;
     if (currentStudent && n.student && n.student !== currentStudent) continue;
@@ -997,6 +1037,32 @@ function msgCard(m) {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   SECTION: קישורים שימושיים
+   ═══════════════════════════════════════════════════════════════ */
+function renderLinks() {
+  const container = document.getElementById('links-list');
+  if (!container) return;
+
+  const links = lastData?.data?.usefulLinks || [];
+  if (!links.length) {
+    container.innerHTML = '<div class="empty" data-icon="🔗">אין קישורים להצגה</div>';
+    return;
+  }
+
+  const BASE = 'https://webtop.smartschool.co.il';
+  container.innerHTML = links.map(l => {
+    const href = l.href && !l.href.startsWith('http') ? BASE + (l.href.startsWith('/') ? l.href : '/' + l.href) : (l.href || '');
+    const txt = fixSpacingForDisplay(l.text || '');
+    if (!txt || txt.length < 2) return '';
+    return `
+      <a class="card type-general link-card" href="${esc(href)}" target="_blank" rel="noopener">
+        <span class="card-title">🔗 ${esc(txt)}</span>
+        <span class="card-expand-hint">פתח באתר ›</span>
+      </a>`;
+  }).filter(Boolean).join('');
+}
+
+/* ═══════════════════════════════════════════════════════════════
    SECTION: הכל (פיד מלא — ללא סינון)
    ═══════════════════════════════════════════════════════════════ */
 function renderFeed(notifications) {
@@ -1054,7 +1120,7 @@ function openCardDetail(n, hwId) {
   const rows = [];
   if (n.student)  rows.push(['👤 תלמיד/ה', esc(n.student)]);
   if (n.subject)  rows.push([isMsg ? '📌 נושא'    : '📖 מקצוע',   esc(n.subject)]);
-  if (n.alertDay) rows.push([isMsg ? '✉️ שולח/ת'  : '📅 יום',      esc(n.alertDay)]);
+  if (n.alertDay) rows.push([isMsg ? '✉️ שולח/ת'  : '📅 יום',      esc(fixSpacingForDisplay(n.alertDay))]);
   // For messages: alertDay = sender, so show date separately
   if (isMsg && n.date)            rows.push(['📅 תאריך', esc(n.date)]);
   // For non-messages: show date only when alertDay is absent
@@ -1076,7 +1142,7 @@ function openCardDetail(n, hwId) {
   const descSection = (n.description && n.description !== n.homeworkText) ? `
     <div class="modal-box modal-box-desc">
       <div class="modal-box-label">${isMsg ? '📨 תוכן ההודעה' : '📋 תיאור מלא מהמערכת'}</div>
-      <div class="modal-box-text">${esc(n.description)}</div>
+      <div class="modal-box-text">${esc(fixSpacingForDisplay(n.description))}</div>
     </div>` : '';
 
   const doneBtn = n.type === 'homework' && hwId && !done ? `
@@ -1373,6 +1439,7 @@ function isSubjectValid(studentName, subject) {
  * Returns { type, date, lesson, teacher, title, note, raw }
  */
 function parseClassEvent(raw) {
+  raw = fixSpacingForDisplay(raw);
   const parts      = raw.split('|').map(s => s.trim());
   const title      = parts[0] || raw;
   const dateMatch  = raw.match(/(\d{2}\/\d{2}\/\d{4})/);

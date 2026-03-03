@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=3" />
+  <link rel="stylesheet" href="style.css?v=4" />
 </head>
 <body>
 
@@ -87,6 +87,7 @@
       <button class="stab"        data-section="calendar"  id="tab-calendar">📅 יומן</button>
       <button class="stab"        data-section="approvals" id="tab-approvals">✍️ אישורים</button>
       <button class="stab"        data-section="messages"  id="tab-messages">📨 הודעות</button>
+      <button class="stab"        data-section="links"     id="tab-links">🔗 קישורים</button>
       <button class="stab"        data-section="feed"      id="tab-feed">📬 הכל</button>
     </nav>
 
@@ -144,6 +145,13 @@
     </div>
   </section>
 
+  <!-- ══ SECTION: קישורים שימושיים ══ -->
+  <section id="section-links" class="page-section hidden">
+    <div class="single-col">
+      <div id="links-list" class="card-list"></div>
+    </div>
+  </section>
+
   <!-- ══ SECTION: הכל (פיד מלא) ══ -->
   <section id="section-feed" class="page-section hidden">
     <div class="single-col">
@@ -177,6 +185,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=3"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>

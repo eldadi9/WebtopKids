@@ -367,6 +367,21 @@ async function extractDashboard(page) {
     }
     result.studentName = studentName;
 
+    // ── Useful links (קיצורי דרך) ──
+    const allHeadings = Array.from(document.querySelectorAll(
+      "h2, h3, h4, h5, [class*='title'], [class*='header'], [class*='heading'], strong, span"
+    ));
+    const shortcutArea = allHeadings.find(el => el.textContent.includes("קיצורי דרך"));
+    if (shortcutArea) {
+      const card = shortcutArea.closest("[class*='card'], [class*='panel'], mat-card, div");
+      if (card) {
+        result.usefulLinks = Array.from(card.querySelectorAll("a[href]")).map(a => ({
+          text: a.textContent.trim().replace(/\s+/g, " ").slice(0, 80),
+          href: a.getAttribute("href") || "",
+        })).filter(l => l.text.length > 1 && l.text.length < 60);
+      }
+    }
+
     // ── Debug: capture all heading texts found on page ──
     result._headingsFound = Array.from(
       document.querySelectorAll("h1, h2, h3, h4, [class*='title'], [class*='header']")
@@ -374,6 +389,61 @@ async function extractDashboard(page) {
 
     return result;
   });
+}
+
+// ── School events (יומן פגישות) — פורים, אסיפות הורים וכו' ─────────────────
+async function extractSchoolEvents(page) {
+  const events = [];
+  try {
+    await page.goto(`${BASE_URL}/mettingsScheduale`, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+    await sleep(1200);
+    const items = await page.evaluate(() => {
+      const cards = Array.from(document.querySelectorAll("[class*='card'], [class*='event'], [class*='title']"));
+      const found = [];
+      for (const c of cards) {
+        const title = c.querySelector("h2, h3, h4, [class*='title']");
+        const text = (title?.textContent || c.textContent).trim().replace(/\s+/g, " ");
+        if (text.length > 2 && text.length < 150 && !/^\d+$/.test(text)) {
+          if (/פורים|פגישה|אירוע|אסיפת|טיול|חג/.test(text)) found.push(text);
+        }
+      }
+      const headings = Array.from(document.querySelectorAll("h2, h3, h4")).map(h => h.textContent.trim());
+      for (const h of headings) {
+        if (h.length > 2 && /פורים|פגישה|אירוע|אסיפת|טיול|חג/.test(h)) found.push(h);
+      }
+      return [...new Set(found)];
+    });
+    for (const t of items) {
+      if (t && t.length > 3) events.push({ name: t, type: "event" });
+    }
+  } catch (e) {
+    if (process.env.WEBTOP_DEBUG === "1") process.stderr.write(`[debug] extractSchoolEvents: ${e.message}\n`);
+  }
+  return events;
+}
+
+// ── Signoffs (חתימות ואישורים) ────────────────────────────────────────────
+async function extractSignoffs(page) {
+  const signoffs = [];
+  try {
+    await page.goto(`${BASE_URL}/signMessaes`, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+    await sleep(1000);
+    const items = await page.evaluate(() => {
+      const rows = document.querySelectorAll("tr, [class*='row'], mat-row, [class*='item']");
+      const found = [];
+      for (const r of rows) {
+        const text = r.textContent.trim().replace(/\s+/g, " ");
+        if (text.length > 30 && /אישור|חתימה|טיול|יציאה/.test(text)) found.push(text);
+      }
+      return found;
+    });
+    for (const t of items) {
+      if (t && t.length > 30 && !/בחר\/י הודעה|אפשרויות|סינון/.test(t)) signoffs.push({ details: t });
+    }
+  } catch (e) {
+    if (process.env.WEBTOP_DEBUG === "1") process.stderr.write(`[debug] extractSignoffs: ${e.message}\n`);
+  }
+  return signoffs;
 }
 
 // ── Notifications page ────────────────────────────────────────────────────────
@@ -447,8 +517,22 @@ async function extractMessages(page) {
       return items;
     });
 
+    let childrenByGrade = {};
+    try {
+      if (existsSync(join(__dirname, "children_config.json"))) {
+        const cc = JSON.parse(readFileSync(join(__dirname, "children_config.json"), "utf8"));
+        for (const c of cc.children || []) {
+          if (c.name && c.grade) childrenByGrade[c.grade] = c.name;
+        }
+      }
+    } catch {}
+
     for (const r of rows) {
       const [datePart, timePart] = (r.date || "").split(/\s+/);
+      let student = null;
+      const combined = `${r.subject || ""} ${r.body || ""}`;
+      if (/שכבת\s*ג['\u05f3]?|כיתה\s*ג|כיתת\s*ג/.test(combined) && childrenByGrade["ג"]) student = childrenByGrade["ג"];
+      else if (/שכבת\s*ב['\u05f3]?|כיתה\s*ב|כיתת\s*ב/.test(combined) && childrenByGrade["ב"]) student = childrenByGrade["ב"];
       messages.push({
         from: r.from || "",
         subject: r.subject || "(ללא נושא)",
@@ -456,6 +540,7 @@ async function extractMessages(page) {
         time: timePart || null,
         body: (r.body || "").slice(0, 500),
         read: !!r.read,
+        ...(student ? { student } : {}),
       });
     }
   } catch (e) {
@@ -595,6 +680,11 @@ async function extractMessages(page) {
   // ── Extract messages (הודעות) — once per account ───────────────────────────
   const messages = await extractMessages(page).catch(() => []);
 
+  // ── Extract school events, signoffs, useful links ───────────────────────────
+  const schoolEvents  = await extractSchoolEvents(page).catch(() => []);
+  const signoffs      = await extractSignoffs(page).catch(() => []);
+  const usefulLinks   = mainDashboard?.usefulLinks || [];
+
   await context.close();
 
   out({
@@ -610,6 +700,9 @@ async function extractMessages(page) {
       tables:               mainDashboard?.tables      || [],
       notifications:        allNotifications,
       messages:             messages,
+      schoolEvents:         schoolEvents,
+      signoffs:             signoffs,
+      usefulLinks:          usefulLinks,
       _debug: {
         headingsFound:  mainDashboard?._headingsFound || [],
         studentsFound:  studentList || [],
