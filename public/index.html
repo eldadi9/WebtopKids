@@ -193,6 +193,17 @@
     </div>
   </div>
 
-  <script src="app.js?v=5"></script>
+  <script src="app.js?v=6"></script>
+  <script>
+    window.onerror = function(msg, url, line, col, err) {
+      console.error('App error:', msg, 'at', line + ':' + col, err);
+      var banner = document.getElementById('error-banner');
+      if (banner) {
+        banner.classList.remove('hidden');
+        var strong = banner.querySelector('.error-text strong');
+        if (strong) strong.textContent = 'שגיאה: ' + (err && err.message ? err.message : String(msg).slice(0, 100));
+      }
+    };
+  </script>
 </body>
 </html>

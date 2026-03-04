@@ -70,7 +70,7 @@ if ($LASTEXITCODE -ne 0) { Fail "Upload failed" }
 Ok "Uploaded"
 
 Step 3 "Installing on server..."
-$remoteCmd = "cd $RemotePath" + " && pm2 stop webtop 2>/dev/null; tar -xf webtop_deploy.tar && rm -f webtop_deploy.tar && npm install --production && (pm2 restart webtop 2>/dev/null || pm2 start server.js --name webtop) && pm2 save"
+$remoteCmd = "cd $RemotePath" + " && pm2 stop webtop 2>/dev/null; tar -xf webtop_deploy.tar && rm -f webtop_deploy.tar && npm install --omit=dev && (pm2 restart webtop 2>/dev/null || pm2 start server.js --name webtop) && pm2 save"
 ssh $Server $remoteCmd
 if ($LASTEXITCODE -ne 0) { Fail "Server sync failed" }
 Ok "Server updated"
