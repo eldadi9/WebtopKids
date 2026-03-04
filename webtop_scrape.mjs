@@ -166,6 +166,22 @@ function isRealNotification(n, raw) {
   );
 }
 
+// Only keep notifications that are "new" — date within last 7 days or in the future.
+// Filters out old irrelevant notifications (e.g. from weeks ago).
+const NEW_NOTIF_DAYS = 7;
+function isNewNotification(n) {
+  if (!n?.date) return false;
+  const [dd, mm, yyyy] = String(n.date).split("/").map(Number);
+  if (!dd || !mm || !yyyy) return false;
+  const notifDate = new Date(yyyy, mm - 1, dd);
+  notifDate.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const cutoff = new Date(today);
+  cutoff.setDate(cutoff.getDate() - NEW_NOTIF_DAYS);
+  return notifDate >= cutoff;
+}
+
 // ── Student switcher helpers ───────────────────────────────────────────────
 // Known non-student option texts (language selector etc.)
 const NON_STUDENT_OPTS = /עברית|English|عربيه|Русский|Pусский|ናይ|ትግርኛ|Українська|forgot|שכחתי/i;
@@ -648,7 +664,21 @@ async function extractNotifications(page) {
   }
 }
 
-// ── Messages page (הודעות) ───────────────────────────────────────────────────
+// ── Messages page (הודעות) — משותף ל-2 הבנות, מיועד להורים ────────────────────
+// Deduplicate by normalized subject+date to avoid same message multiple times
+function msgDedupKey(m) {
+  const subj = (m.subject || "").trim().replace(/\s+/g, " ").slice(0, 100);
+  const date = m.date || "";
+  return `${subj}__${date}`;
+}
+
+// Parse DD/MM/YYYY from subject when date is missing (e.g. "|04/03/2026|" or "(רביעי) 02/03/2026")
+function parseDateFromSubject(subject) {
+  if (!subject) return null;
+  const m = subject.match(/(\d{2}\/\d{2}\/\d{4})/);
+  return m ? m[1] : null;
+}
+
 async function extractMessages(page) {
   const messages = [];
   try {
@@ -666,56 +696,72 @@ async function extractMessages(page) {
       await msgLink.click();
       await page.waitForLoadState("networkidle", { timeout: TIMEOUT });
     }
-    await sleep(600);
+    await sleep(800);
 
     const rows = await page.evaluate(() => {
       const items = [];
-      const rows = document.querySelectorAll("tr, [class*='message'], [class*='mail'], mat-row, .mat-mdc-row");
+      const sel = "tr, [class*='message'], [class*='mail'], mat-row, .mat-mdc-row, [class*='row']";
+      const rows = document.querySelectorAll(sel);
       for (const row of rows) {
         const text = row.textContent.trim().replace(/\s+/g, " ");
-        if (text.length < 30) continue;
-        const cells = row.querySelectorAll("td, [class*='cell']");
+        if (text.length < 20) continue;
+        const cells = row.querySelectorAll("td, [class*='cell'], mat-cell");
         let from = "", subject = "", date = "", body = "", read = false;
         if (cells.length >= 2) {
-          from = cells[0]?.textContent.trim() || "";
-          subject = cells[1]?.textContent.trim() || "";
-          if (cells.length >= 3) date = cells[2]?.textContent.trim() || "";
-          if (cells.length >= 4) body = cells[3]?.textContent.trim() || "";
+          from = (cells[0]?.textContent || "").trim();
+          subject = (cells[1]?.textContent || "").trim();
+          if (cells.length >= 3) date = (cells[2]?.textContent || "").trim();
+          if (cells.length >= 4) body = (cells[3]?.textContent || "").trim();
+          const noRead = row.querySelector("[class*='unread'], [class*='bold'], .msg-unread, [class*='Unread']");
+          read = !noRead;
         } else {
           const noRead = row.querySelector("[class*='unread'], [class*='bold'], .msg-unread");
           read = !noRead;
-          subject = text.slice(0, 80);
+          subject = text.slice(0, 120);
         }
         if (subject || from) items.push({ from, subject, date, body, read });
       }
       return items;
     });
 
-    let childrenByGrade = {};
-    try {
-      if (existsSync(join(__dirname, "children_config.json"))) {
-        const cc = JSON.parse(readFileSync(join(__dirname, "children_config.json"), "utf8"));
-        for (const c of cc.children || []) {
-          if (c.name && c.grade) childrenByGrade[c.grade] = c.name;
-        }
-      }
-    } catch {}
-
+    // Deduplicate — same subject+date = same message (Webtop sometimes returns duplicates)
+    const seen = new Map();
     for (const r of rows) {
-      const [datePart, timePart] = (r.date || "").split(/\s+/);
-      let student = null;
-      const combined = `${r.subject || ""} ${r.body || ""}`;
-      if (/שכבת\s*ג['\u05f3]?|כיתה\s*ג|כיתת\s*ג/.test(combined) && childrenByGrade["ג"]) student = childrenByGrade["ג"];
-      else if (/שכבת\s*ב['\u05f3]?|כיתה\s*ב|כיתת\s*ב/.test(combined) && childrenByGrade["ב"]) student = childrenByGrade["ב"];
+      let [datePart, timePart] = (r.date || "").split(/\s+/).map((s) => s.trim());
+      if (!datePart) datePart = parseDateFromSubject(r.subject);
+      const key = msgDedupKey({ subject: r.subject, date: datePart });
+      if (seen.has(key)) continue;
+      seen.set(key, true);
+
       messages.push({
-        from: r.from || "",
-        subject: r.subject || "(ללא נושא)",
+        from: (r.from || "").trim(),
+        subject: (r.subject || "(ללא נושא)").trim().slice(0, 200),
         date: datePart || null,
         time: timePart || null,
-        body: (r.body || "").slice(0, 500),
+        body: (r.body || "").trim().slice(0, 500),
         read: !!r.read,
-        ...(student ? { student } : {}),
       });
+    }
+
+    // Try to fetch body by clicking first row (Webtop may load body only on click)
+    if (messages.length > 0 && messages.every((m) => !m.body)) {
+      try {
+        const firstRow = page.locator("tr, [class*='message'], mat-row").first();
+        if (await firstRow.isVisible({ timeout: 2000 })) {
+          await firstRow.click();
+          await sleep(1000);
+          const detail = await page.evaluate(() => {
+            const panel = document.querySelector("[class*='detail'], [class*='content'], [class*='body'], .mat-mdc-dialog-content");
+            const bodyEl = panel || document.querySelector("mat-dialog-content, [role='dialog'] .mat-mdc-dialog-content");
+            return (bodyEl?.textContent || "").trim().slice(0, 500);
+          });
+          if (detail && detail.length > 50) {
+            messages[0].body = detail.slice(0, 500);
+          }
+        }
+      } catch (_) {
+        if (process.env.WEBTOP_DEBUG === "1") process.stderr.write("[debug] Message body click-extract skipped\n");
+      }
     }
   } catch (e) {
     if (process.env.WEBTOP_DEBUG === "1") process.stderr.write(`[debug] extractMessages error: ${e.message}\n`);
@@ -893,6 +939,9 @@ async function extractMessages(page) {
       await sleep(800);
     }
   }
+
+  // ── Filter to only NEW notifications (within last 7 days or future) ───────
+  allNotifications = allNotifications.filter(isNewNotification);
 
   // ── Deduplicate notifications (same content from multiple students) ───────
   const notifKey = (n) => `${(n.type||'').trim()}_${(n.student||'').trim()}_${(n.subject||'').trim()}_${(n.date||'').trim()}_${(n.lesson||'')}`;

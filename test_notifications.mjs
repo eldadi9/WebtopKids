@@ -27,7 +27,7 @@ function futureDate(daysFromNow) {
   return `${dd}/${mm}/${d.getFullYear()}`;
 }
 
-// Past date (45+ days ago - should be skipped for non-grade)
+// Past date (7+ days ago - should be skipped for non-grade)
 function oldDate(daysAgo) {
   const d = new Date();
   d.setDate(d.getDate() - daysAgo);
@@ -56,7 +56,7 @@ function runSendNewAlerts(newNotifications, prevIds) {
       if (dd && mm && yyyy) {
         const nDate = new Date(yyyy, mm - 1, dd);
         const daysOld = Math.round((Date.now() - nDate.getTime()) / (1000 * 60 * 60 * 24));
-        if (daysOld > 45) continue;
+        if (daysOld > 7) continue;
       }
     }
     wouldSend.push(n);
@@ -126,10 +126,10 @@ async function main() {
   const skipEarly = runSendNewAlerts([absenceEarly], prevIds);
   ok('absence לפני 07:00 — מדולג', skipEarly.length === 0, skipEarly.length === 0 ? 'נדולג נכון ✓' : 'נשלח בטעות');
 
-  // ─── 3. Stale alert (>45 days) — should SKIP ────────────────────────────
-  const staleLate = { ...baseNotif, type: 'late', date: oldDate(50), subject: 'ספורט' };
+  // ─── 3. Stale alert (>7 days) — should SKIP ─────────────────────────────
+  const staleLate = { ...baseNotif, type: 'late', date: oldDate(10), subject: 'ספורט' };
   const skipStale = runSendNewAlerts([staleLate], prevIds);
-  ok('התראה ישנה >45 יום — מדולגת', skipStale.length === 0, skipStale.length === 0 ? 'נדולגת נכון ✓' : 'נשלחה בטעות');
+  ok('התראה ישנה >7 יום — מדולגת', skipStale.length === 0, skipStale.length === 0 ? 'נדולגת נכון ✓' : 'נשלחה בטעות');
 
   // ─── 4. Grade — never skipped by date (can be old) ────────────────────────
   const oldGrade = { ...baseNotif, type: 'grade', date: oldDate(60), description: 'ציון 90' };

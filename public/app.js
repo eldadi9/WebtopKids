@@ -500,10 +500,10 @@ function isValidNotification(n) {
     const h = parseInt(n.alertTime.split(':')[0], 10);
     if (!isNaN(h) && h < 7) return false;
   }
-  // Block stale actionable alerts (not grades / homework, which are records)
+  // Block stale actionable alerts (not grades / homework) — only new (within 7 days)
   if (!['grade', 'homework'].includes(n.type)) {
     const daysOld = calcDaysLeft(n.date);
-    if (daysOld !== null && daysOld < -45) return false;
+    if (daysOld !== null && daysOld < -7) return false;
   }
   return true;
 }
@@ -1050,10 +1050,8 @@ function renderMessages() {
     return;
   }
 
-  // Filter by currentStudent if set
-  const filtered = currentStudent
-    ? messages.filter(m => !m.student || m.student === currentStudent)
-    : messages;
+  // Messages are shared for both children, for parents — no student filter
+  const filtered = messages;
 
   const isRead = (m) => m.read || lastStatus[msgId(m)]?.read;
   const sorted = [...filtered].sort((a, b) => {
@@ -1252,7 +1250,10 @@ function openCardDetail(n, hwId, msgId) {
     <div class="modal-box modal-box-desc">
       <div class="modal-box-label">${isMsg ? '📨 תוכן ההודעה' : '📋 תיאור מלא מהמערכת'}</div>
       <div class="modal-box-text">${esc(fixSpacingForDisplay(n.description))}</div>
-    </div>` : '';
+    </div>` : (isMsg ? `
+    <div class="modal-box modal-box-desc">
+      <a class="btn-open-webtop" href="https://webtop.smartschool.co.il/messages" target="_blank" rel="noopener">פתח באתר Webtop לצפייה בתוכן המלא ›</a>
+    </div>` : '');
 
   const doneBtn = n.type === 'homework' && hwId && !done ? `
     <button class="btn-done btn-done-modal"
@@ -1393,6 +1394,7 @@ function handleMarkDone(btn) {
 }
 
 async function markMessageRead(id) {
+  if (!id) return;
   try {
     const res = await fetch('/api/messages/read', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1401,6 +1403,22 @@ async function markMessageRead(id) {
     const j = await res.json();
     if (j.ok) {
       lastStatus[id] = { read: true };
+      // Update modal badge if it shows this message
+      const modal = document.getElementById('detail-modal');
+      if (modal && !modal.classList.contains('hidden')) {
+        const rows = modal.querySelectorAll('.modal-row');
+        for (const row of rows) {
+          const key = row.querySelector('.modal-key');
+          if (key && (key.textContent.includes('סטטוס') || key.textContent.includes('קטגוריה'))) {
+            const val = row.querySelector('.modal-val');
+            if (val && val.textContent.includes('לא נקרא')) {
+              val.textContent = 'נקרא ✓';
+              val.style.color = '#34d399';
+              break;
+            }
+          }
+        }
+      }
       rerender();
     }
   } catch (e) { console.warn('markMessageRead:', e); }

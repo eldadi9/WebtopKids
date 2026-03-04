@@ -183,13 +183,13 @@ async function sendNewAlerts(newNotifications, prevIds) {
         continue;
       }
     }
-    // Skip stale non-grade alerts (>45 days old) — avoid ancient Telegram spam
+    // Skip stale non-grade alerts (>7 days old) — only new notifications
     if (n.type !== 'grade' && n.date) {
       const [dd, mm, yyyy] = n.date.split('/').map(Number);
       if (dd && mm && yyyy) {
         const nDate   = new Date(yyyy, mm - 1, dd);
         const daysOld = Math.round((Date.now() - nDate.getTime()) / (1000 * 60 * 60 * 24));
-        if (daysOld > 45) {
+        if (daysOld > 7) {
           console.log(`[alert] Skipped stale alert (${daysOld}d old) — ${n.type} / ${n.subject}`);
           continue;
         }
@@ -355,13 +355,15 @@ app.post('/api/push', async (req, res) => {
     // 2. Deadline check — also run at push time (not just hourly)
     await checkDeadlines();
 
-    // 3. New message Telegram alerts
+    // 3. New message Telegram alerts (one per unique message — stable key)
     const newMessages = data?.data?.messages || [];
+    const seenMsgKeys = new Set();
     for (const m of newMessages) {
       if (m.read) continue; // already read — skip
-      const msgKey = `msg_${(m.from || '').trim()}_${(m.date || '').trim()}_${(m.subject || '').trim().slice(0, 30)}`;
-      if (sentReminders.has(msgKey)) continue;
+      const msgKey = `msg_${String(m.from || '').trim().replace(/[^a-zA-Z0-9\u0590-\u05FF\s]/g, '')}|${String(m.date || '').trim()}|${String(m.subject || '').trim().slice(0, 50).replace(/[^a-zA-Z0-9\u0590-\u05FF|_\-\/\.]/g, '_')}`;
+      if (sentReminders.has(msgKey) || seenMsgKeys.has(msgKey)) continue;
       sentReminders.add(msgKey);
+      seenMsgKeys.add(msgKey);
       saveSentReminders();
       const lines = [
         `📨 <b>הודעה חדשה מהמורה!</b>`,
