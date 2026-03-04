@@ -301,7 +301,7 @@ function updateStudentSwitcher(notifications) {
 function updateChildPhoto() {
   const img = document.getElementById('child-photo');
   if (!img) return;
-  const config = lastChildren?.children?.find(c => c.name === currentStudent);
+  const config = resolveChildConfig(currentStudent);
   const photo  = config?.photo;
   if (photo) {
     img.src = photo;
@@ -352,7 +352,7 @@ function initPhotoUpload() {
           body:    JSON.stringify({ photo: croppedBase64 }),
         });
         if (!res.ok) throw new Error(await res.text());
-        const child = lastChildren?.children?.find(c => c.name === currentStudent);
+        const child = resolveChildConfig(currentStudent);
         if (child) child.photo = croppedBase64;
         updateChildPhoto();
       } catch (e) {

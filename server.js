@@ -110,8 +110,11 @@ function saveSentReminders() {
 const sentReminders = loadSentReminders(); // ← persisted across restarts
 
 // ─── ID helpers ───────────────────────────────────────────────────────────────
-function hwId(n)    { return `${n.subject || ''}_${n.date || ''}_${n.lesson || ''}`; }
-function notifId(n) { return `${n.type}_${n.student}_${n.subject}_${n.date}_${n.lesson}`; }
+function hwId(n) { return `${(n.subject || '').trim()}_${(n.date || '').trim()}_${(n.lesson || '')}`; }
+// Normalized — trim all parts to avoid duplicate alerts when scrape returns slight variations
+function notifId(n) {
+  return `${(n.type || '').trim()}_${(n.student || '').trim()}_${(n.subject || '').trim()}_${(n.date || '').trim()}_${(n.lesson || '')}`;
+}
 
 // ─── Scraper runner ───────────────────────────────────────────────────────────
 function runScraper() {
@@ -356,7 +359,7 @@ app.post('/api/push', async (req, res) => {
     const newMessages = data?.data?.messages || [];
     for (const m of newMessages) {
       if (m.read) continue; // already read — skip
-      const msgKey = `msg_${m.from || ''}_${m.date || ''}_${(m.subject || '').slice(0, 30)}`;
+      const msgKey = `msg_${(m.from || '').trim()}_${(m.date || '').trim()}_${(m.subject || '').trim().slice(0, 30)}`;
       if (sentReminders.has(msgKey)) continue;
       sentReminders.add(msgKey);
       saveSentReminders();
@@ -440,12 +443,15 @@ app.get('/api/external-links', (req, res) => {
 
 // POST /api/children/:name/photo — save base64 photo for a child
 app.post('/api/children/:name/photo', express.json({ limit: '10mb' }), (req, res) => {
-  const name  = decodeURIComponent(req.params.name);
+  const name  = decodeURIComponent(req.params.name).trim();
   const { photo } = req.body || {};
   if (!photo) return res.status(400).json({ ok: false, error: 'missing photo' });
   const config = loadChildrenConfig();
-  const child  = (config.children || []).find(c => c.name === name);
-  if (!child) return res.status(404).json({ ok: false, error: 'child not found' });
+  // Match by full name or short name (אמי vs גונשרוביץ אמי)
+  const child  = (config.children || []).find(c =>
+    c.name === name || c.name.endsWith(' ' + name)
+  );
+  if (!child) return res.status(404).json({ ok: false, error: 'child not found', tried: name });
   child.photo = photo; // base64 data URL
   try {
     writeFileSync(CHILDREN_CONFIG_FILE, JSON.stringify(config, null, 2));

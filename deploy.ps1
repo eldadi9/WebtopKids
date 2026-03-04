@@ -60,7 +60,7 @@ Ok "Connected"
 Step 2 "Creating archive and uploading..."
 Remove-Item $tempTar -ErrorAction SilentlyContinue
 Push-Location $projectRoot
-& tar -cf $tempTar --exclude=node_modules --exclude=.git --exclude=.env --exclude="*.env" --exclude=homework_status.json --exclude=.webtop_session.json --exclude=.cursor --exclude=.webtop_profile --exclude=data_cache.json --exclude=sent_reminders.json --exclude=nul --exclude="*.log" .
+& tar -cf $tempTar --exclude=node_modules --exclude=.git --exclude=.env --exclude="*.env" --exclude=homework_status.json --exclude=.webtop_session.json --exclude=.cursor --exclude=.webtop_profile --exclude=data_cache.json --exclude=sent_reminders.json --exclude=children_config.json --exclude=nul --exclude="*.log" .
 Pop-Location
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $tempTar)) { Fail "Archive failed" }
 Ok "Archive created"

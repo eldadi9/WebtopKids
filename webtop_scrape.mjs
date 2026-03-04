@@ -895,7 +895,7 @@ async function extractMessages(page) {
   }
 
   // ── Deduplicate notifications (same content from multiple students) ───────
-  const notifKey = (n) => `${n.type}_${n.student}_${n.subject}_${n.date}_${n.lesson}`;
+  const notifKey = (n) => `${(n.type||'').trim()}_${(n.student||'').trim()}_${(n.subject||'').trim()}_${(n.date||'').trim()}_${(n.lesson||'')}`;
   const seenNotifs = new Map();
   for (const n of allNotifications) {
     const k = notifKey(n);
