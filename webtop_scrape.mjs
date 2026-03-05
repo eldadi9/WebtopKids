@@ -167,7 +167,7 @@ function isRealNotification(n, raw) {
 }
 
 // Only keep notifications that are "new" — date within last 7 days or in the future.
-// Filters out old irrelevant notifications (e.g. from weeks ago).
+// Homework: only if due date is today or future (לא שיעורי בית שפג תוקף).
 const NEW_NOTIF_DAYS = 7;
 function isNewNotification(n) {
   if (!n?.date) return false;
@@ -177,6 +177,7 @@ function isNewNotification(n) {
   notifDate.setHours(0, 0, 0, 0);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+  if (n.type === "homework") return notifDate >= today;
   const cutoff = new Date(today);
   cutoff.setDate(cutoff.getDate() - NEW_NOTIF_DAYS);
   return notifDate >= cutoff;
@@ -665,9 +666,9 @@ async function extractNotifications(page) {
 }
 
 // ── Messages page (הודעות) — משותף ל-2 הבנות, מיועד להורים ────────────────────
-// Deduplicate by normalized subject+date to avoid same message multiple times
+// Deduplicate by normalized subject+date — remove "תק " prefix (common duplicate variant)
 function msgDedupKey(m) {
-  const subj = (m.subject || "").trim().replace(/\s+/g, " ").slice(0, 100);
+  const subj = (m.subject || "").trim().replace(/\s+/g, " ").replace(/^\s*תק\s+/, "").slice(0, 80);
   const date = m.date || "";
   return `${subj}__${date}`;
 }

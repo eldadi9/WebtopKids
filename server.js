@@ -193,6 +193,11 @@ async function sendNewAlerts(newNotifications, prevIds) {
           console.log(`[alert] Skipped stale alert (${daysOld}d old) — ${n.type} / ${n.subject}`);
           continue;
         }
+        // Skip homework past due — לא שיעורי בית שכבר עבר מועד הגשה
+        if (n.type === 'homework' && daysOld > 0) {
+          console.log(`[alert] Skipped past-due homework — ${n.subject} / ${n.date}`);
+          continue;
+        }
       }
     }
 
@@ -355,12 +360,15 @@ app.post('/api/push', async (req, res) => {
     // 2. Deadline check — also run at push time (not just hourly)
     await checkDeadlines();
 
-    // 3. New message Telegram alerts (one per unique message — stable key)
+    // 3. New message Telegram alerts (one per unique message — stable key, no duplicates)
     const newMessages = data?.data?.messages || [];
     const seenMsgKeys = new Set();
+    const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+    const normSubject = (s) => norm(s).replace(/^\s*תק\s+/, '').slice(0, 60);
     for (const m of newMessages) {
       if (m.read) continue; // already read — skip
-      const msgKey = `msg_${String(m.from || '').trim().replace(/[^a-zA-Z0-9\u0590-\u05FF\s]/g, '')}|${String(m.date || '').trim()}|${String(m.subject || '').trim().slice(0, 50).replace(/[^a-zA-Z0-9\u0590-\u05FF|_\-\/\.]/g, '_')}`;
+      const subjNorm = normSubject(m.subject);
+      const msgKey = `msg_|${norm(m.date)}|${subjNorm}`;
       if (sentReminders.has(msgKey) || seenMsgKeys.has(msgKey)) continue;
       sentReminders.add(msgKey);
       seenMsgKeys.add(msgKey);
