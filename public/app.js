@@ -200,9 +200,16 @@ function rerender() {
   })();
   renderApprovals();
   renderMessages();
-  renderLinks();
   renderExternalLinks();
-  renderFeed(visible);
+  const schoolEvResolved = resolveSchoolEventsForStudent(
+    lastData?.data?.schoolEventsByStudent, currentStudent, lastData?.data?.schoolEvents || []);
+  const mergedEvents = [...lastEvents];
+  const today = new Date();
+  const todayStr = `${String(today.getDate()).padStart(2,'0')}/${String(today.getMonth()+1).padStart(2,'0')}/${today.getFullYear()}`;
+  for (const se of schoolEvResolved) {
+    mergedEvents.push({ name: se.name, type: se.type || 'event', date: todayStr, details: se.details || '', emoji: '🏫' });
+  }
+  renderFeed(visible, classEvents);
   updateTabCounts(visible, classEvents);
 }
 
@@ -236,8 +243,12 @@ function updateTabCounts(notifications, classEvents) {
   setTab('tab-calendar',  '📅', 'יומן',        calItems);
   setTab('tab-approvals', '✍️', 'אישורים',     approvals);
   setTab('tab-messages',  '📨', 'הודעות',      msgs);
-  const linksCount = (lastData?.data?.usefulLinks || []).length;
-  setTab('tab-links',     '🔗', 'קישורים',     linksCount);
+  const feedCount = notifications.filter(n => (n.type !== 'homework' || isSubjectValid(n.student, n.subject)) && isValidNotification(n)).length
+    + (classEvents || []).filter(e => !e.includes('לא נמצאו') && isEventValidForCurrentChild(e)).length
+    + (lastData?.data?.messages || []).length
+    + (lastData?.data?.approvals || []).length + (lastData?.data?.signoffs || []).length
+    + lastEvents.length;
+  setTab('tab-feed',      '📬', 'הכל',         feedCount);
   setTab('tab-external',  '🔗', 'אתרים חיצוניים', lastExternalLinks.length);
 }
 
@@ -1168,45 +1179,144 @@ function renderExternalLinks() {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   SECTION: הכל (פיד מלא — ללא סינון)
+   SECTION: הכל (פיד מלא — כל המידע: התראות, אירועים, הודעות, אישורים)
    ═══════════════════════════════════════════════════════════════ */
-function renderFeed(notifications) {
+function renderFeed(notifications, classEvents) {
   const container = document.getElementById('feed-list');
   if (!container) return;
 
-  // Hide homework items whose subject is invalid for this child
-  const filtered = notifications
-    .filter(n => (n.type !== 'homework' || isSubjectValid(n.student, n.subject)) && isValidNotification(n))
-    .sort((a, b) => dateSortKey(b.date) - dateSortKey(a.date));
+  const d = lastData?.data || {};
+  const schoolEvResolved = resolveSchoolEventsForStudent(
+    d.schoolEventsByStudent, currentStudent, d.schoolEvents || []);
+  const mergedEvents = [...lastEvents];
+  const today = new Date();
+  const todayStr = `${String(today.getDate()).padStart(2,'0')}/${String(today.getMonth()+1).padStart(2,'0')}/${today.getFullYear()}`;
+  for (const se of schoolEvResolved) {
+    mergedEvents.push({ name: se.name, type: se.type || 'event', date: todayStr, details: se.details || '', emoji: '🏫' });
+  }
 
-  if (!filtered.length) {
-    container.innerHTML = '<div class="empty" data-icon="📬">אין התראות</div>';
+  const items = [];
+
+  // 1. Notifications (homework, alerts, grades, etc.)
+  const filteredNotifs = notifications
+    .filter(n => (n.type !== 'homework' || isSubjectValid(n.student, n.subject)) && isValidNotification(n));
+  for (const n of filteredNotifs) {
+    items.push({ sortKey: dateSortKey(n.date), type: 'notification', n });
+  }
+
+  // 2. Class events (אירועים בשיעור) — per-student
+  for (const raw of classEvents || []) {
+    if (raw.includes('לא נמצאו') || !isEventValidForCurrentChild(raw)) continue;
+    const parsed = parseClassEvent(raw);
+    if (!parsed.date) continue;
+    items.push({ sortKey: dateSortKey(parsed.date), type: 'class_event', parsed, raw });
+  }
+
+  // 3. Messages (shared)
+  for (const m of d.messages || []) {
+    const datePart = (m.date || '').split(/\s+/)[0] || parseDateFromSubject(m.subject) || todayStr;
+    items.push({ sortKey: dateSortKey(datePart), type: 'message', m });
+  }
+
+  // 4. Approvals (scraped + signoffs + events)
+  const scrapedApprovals = d.approvals || [];
+  const signoffs = d.signoffs || [];
+  for (const a of scrapedApprovals) {
+    items.push({ sortKey: dateSortKey(a.date), type: 'approval', a, label: a.title || a.label, sub: a.itinerary });
+  }
+  for (const s of signoffs) {
+    if (scrapedApprovals.some(x => (x.details || '') === (s.details || ''))) continue;
+    const txt = (s.details || '').trim();
+    if (txt.length > 15) {
+      items.push({ sortKey: dateSortKey(s.date), type: 'approval', a: s, label: txt.slice(0, 60), sub: txt });
+    }
+  }
+  for (const ev of lastEvents) {
+    if (!ev.date || (ev.childName && currentStudent && ev.childName !== currentStudent)) continue;
+    if (ev.type === 'event' || /אישור/.test(ev.details || '')) {
+      let dateStr = ev.date;
+      if (/^\d{2}\/\d{2}$/.test(dateStr)) dateStr = `${dateStr}/${today.getFullYear()}`;
+      items.push({ sortKey: dateSortKey(dateStr), type: 'approval', a: ev, label: `${ev.emoji || '📋'} ${ev.name}`, sub: ev.details || '' });
+    }
+  }
+
+  // 5. Special events (birthdays, school events) — only schoolEvResolved to avoid dupes with approvals
+  const yearStr = String(today.getFullYear());
+  for (const ev of schoolEvResolved) {
+    if (!ev.name) continue;
+    let dateStr = ev.date || todayStr;
+    if (/^\d{2}\/\d{2}$/.test(dateStr)) dateStr = `${dateStr}/${yearStr}`;
+    items.push({ sortKey: dateSortKey(dateStr), type: 'special_event', ev });
+  }
+  for (const ev of lastEvents) {
+    if (!ev.date || (ev.childName && currentStudent && ev.childName !== currentStudent)) continue;
+    if (ev.type === 'event' && !/אישור/.test(ev.details || '')) {
+      let dateStr = ev.date;
+      if (/^\d{2}\/\d{2}$/.test(dateStr)) dateStr = `${dateStr}/${yearStr}`;
+      items.push({ sortKey: dateSortKey(dateStr), type: 'special_event', ev });
+    }
+  }
+
+  items.sort((a, b) => (b.sortKey || 0) - (a.sortKey || 0));
+
+  if (!items.length) {
+    container.innerHTML = '<div class="empty" data-icon="📬">אין פריטים להצגה</div>';
     return;
   }
 
-  container.innerHTML = filtered.map(n => {
-    const idx   = allocCard(n);
-    const label = TYPE_LABEL[n.type] || TYPE_LABEL.general;
-    const id    = n.type === 'homework' ? homeworkId(n) : '';
-    const done  = id && lastStatus[id]?.done;
-    const meta  = [
-      n.alertDay || n.date,
-      n.lesson   ? `שיעור ${n.lesson}` : null,
-      n.student  ? `👤 ${n.student}`  : null,
-    ].filter(Boolean).join(' | ');
-
-    return `
-      <div class="card type-${n.type || 'general'}${done ? ' done-card' : ''} clickable-card"
-           data-card-idx="${idx}" data-hw-id="${esc(id)}">
-        <div class="card-header">
-          <span class="card-title">${esc(n.subject || n.student || '?')}</span>
-          <span class="badge badge-${n.type || 'general'}">${label}</span>
-        </div>
-        <div class="card-meta">${esc(meta)}</div>
-        ${n.homeworkText ? `<div class="hw-text">📝 ${esc(n.homeworkText)}</div>` : ''}
-        <div class="card-expand-hint">לחץ לפרטים ›</div>
-      </div>`;
-  }).join('');
+  container.innerHTML = items.map(it => {
+    if (it.type === 'notification') {
+      const n = it.n;
+      const idx = allocCard(n);
+      const label = TYPE_LABEL[n.type] || TYPE_LABEL.general;
+      const id = n.type === 'homework' ? homeworkId(n) : '';
+      const done = id && lastStatus[id]?.done;
+      const meta = [n.alertDay || n.date, n.lesson ? `שיעור ${n.lesson}` : null, n.student ? `👤 ${n.student}` : null].filter(Boolean).join(' | ');
+      return `<div class="card type-${n.type || 'general'}${done ? ' done-card' : ''} clickable-card" data-card-idx="${idx}" data-hw-id="${esc(id)}">
+        <div class="card-header"><span class="card-title">${esc(n.subject || n.student || '?')}</span><span class="badge badge-${n.type || 'general'}">${label}</span></div>
+        <div class="card-meta">${esc(meta)}</div>${n.homeworkText ? `<div class="hw-text">📝 ${esc(n.homeworkText)}</div>` : ''}
+        <div class="card-expand-hint">לחץ לפרטים ›</div></div>`;
+    }
+    if (it.type === 'class_event') {
+      const p = it.parsed;
+      const idx = allocCard({ type: p.type, subject: p.title, date: p.date, description: it.raw, lesson: p.lesson });
+      const label = TYPE_LABEL[p.type] || TYPE_LABEL.general;
+      return `<div class="card type-${p.type || 'general'} clickable-card" data-card-idx="${idx}">
+        <div class="card-header"><span class="card-title">${esc(p.title)}</span><span class="badge badge-${p.type || 'general'}">${label}</span></div>
+        <div class="card-meta">${esc(p.date || '')}${p.lesson ? ` · שיעור ${p.lesson}` : ''}</div>
+        ${p.note ? `<div class="card-desc">${esc(p.note)}</div>` : ''}<div class="card-expand-hint">לחץ לפרטים ›</div></div>`;
+    }
+    if (it.type === 'message') {
+      const m = it.m;
+      const cardObj = messageToCardObj(m);
+      const idx = allocCard({ ...cardObj, type: 'message', _msgRaw: m });
+      const readStatus = !!m.read;
+      const meta = [m.from, m.date, m.time].filter(Boolean).join(' | ');
+      const bodyPreview = m.body && m.body.length > 0
+        ? esc(m.body.slice(0, 120)) + (m.body.length > 120 ? '...' : '')
+        : '';
+      return `<div class="card type-message${!readStatus ? ' msg-unread-card' : ''} clickable-card" data-card-idx="${idx}" data-msg-id="${esc(msgId(m))}">
+        <div class="card-header"><span class="card-title">${esc(cardObj.subject)}</span>${!readStatus ? '<span class="badge badge-message">📨 חדש</span>' : '<span class="badge badge-message-read">✓ נקרא</span>'}</div>
+        <div class="card-meta">${esc(meta)}</div>${bodyPreview ? `<div class="card-desc">${bodyPreview}</div>` : ''}<div class="card-expand-hint">לחץ לקריאה ›</div></div>`;
+    }
+    if (it.type === 'approval') {
+      const a = it.a;
+      const label = it.label || a.label || '';
+      const sub = it.sub || a.itinerary || a.details || '';
+      const approved = a.status === 'approved' || lastStatus[approvalId(a)]?.approved;
+      const idx = allocCard({ type: 'approval', subject: label, description: sub, ...a });
+      return `<div class="card type-general${approved ? ' done-card' : ''}" data-card-idx="${idx}">
+        <div class="card-header"><span class="card-title">${esc(label)}</span>${approved ? '<span class="badge badge-grade">✓ אושר</span>' : '<span class="badge badge-general">ממתין</span>'}</div>
+        ${sub ? `<div class="card-meta">${esc(sub.slice(0, 100))}</div>` : ''}</div>`;
+    }
+    if (it.type === 'special_event') {
+      const ev = it.ev;
+      const label = `${ev.emoji || '📅'} ${ev.name}`;
+      const idx = allocCard({ type: 'event', subject: ev.name, description: ev.details });
+      return `<div class="card type-general" data-card-idx="${idx}"><div class="card-title">${esc(label)}</div>${ev.details ? `<div class="card-desc">${esc(ev.details)}</div>` : ''}</div>`;
+    }
+    return '';
+  }).filter(Boolean).join('');
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1745,6 +1855,12 @@ function approvalId(item) {
   if (item.msgId) return 'approval_' + String(item.msgId).replace(/[^a-zA-Z0-9\-_=]/g, '_').slice(0, 100);
   const s = `${item.label || ''}|${item.sub || ''}|${item.date || ''}`;
   return 'approval_' + s.replace(/[^a-zA-Z0-9\u0590-\u05FF|_\-\/\.]/g, '_').slice(0, 80);
+}
+/** Parse DD/MM/YYYY from subject when date is missing (e.g. "|04/03/2026|") */
+function parseDateFromSubject(subject) {
+  if (!subject) return null;
+  const m = String(subject).match(/(\d{2}\/\d{2}\/\d{4})/);
+  return m ? m[1] : null;
 }
 function dateSortKey(dateStr) {
   if (!dateStr) return 0;
