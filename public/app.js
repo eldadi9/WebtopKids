@@ -66,13 +66,14 @@ async function fetchAll(forceRefresh = false) {
   showErrorBanner(false);
   try {
     const url = forceRefresh ? '/api/data?refresh=1' : '/api/data';
+    const fetchOpts = { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } };
     const results = await Promise.allSettled([
-      fetch(url),
-      fetch('/api/status'),
-      fetch('/api/events'),
-      fetch('/api/children'),
-      fetch('/api/insights'),
-      fetch('/api/external-links'),
+      fetch(url, fetchOpts),
+      fetch('/api/status', fetchOpts),
+      fetch('/api/events', fetchOpts),
+      fetch('/api/children', fetchOpts),
+      fetch('/api/insights', fetchOpts),
+      fetch('/api/external-links', fetchOpts),
     ]);
     const dataRes = results[0].status === 'fulfilled' ? results[0].value : null;
     const statusRes = results[1].status === 'fulfilled' ? results[1].value : null;
@@ -97,8 +98,10 @@ async function fetchAll(forceRefresh = false) {
     lastExternalLinks = ext?.links || [];
     if (!Array.isArray(lastEvents)) lastEvents = [];
 
-    if (!lastData?.ok && (lastData?.error || !lastData?.ok)) {
+    if (!lastData?.ok) {
       showErrorBanner(true);
+    } else {
+      showErrorBanner(false); /* ensure banner hidden when we have valid data */
     }
 
     lastSyncTime = new Date();
@@ -1086,9 +1089,10 @@ function renderMessages() {
   container.innerHTML = html;
 }
 
-function msgCard(m) {
+/** Convert raw message object to card object (used by msgCard and renderFeed) */
+function messageToCardObj(m) {
   const readStatus = m.read || lastStatus[msgId(m)]?.read;
-  const cardObj = {
+  return {
     type:        'message',
     subject:     m.subject  || '(ללא נושא)',
     student:     m.student  || null,
@@ -1099,6 +1103,11 @@ function msgCard(m) {
     description: m.body     || null,
     _msgRaw:     m,
   };
+}
+
+function msgCard(m) {
+  const cardObj = messageToCardObj(m);
+  const readStatus = m.read || lastStatus[msgId(m)]?.read;
   const idx  = allocCard(cardObj);
   const meta = [
     m.from    ? `✉️ ${m.from}` : null,
@@ -1850,6 +1859,21 @@ function homeworkId(n) {
 function msgId(m) {
   const s = `${m.from || ''}|${m.date || ''}|${(m.subject || '').slice(0, 50)}`;
   return 'msg_' + s.replace(/[^a-zA-Z0-9\u0590-\u05FF|_\-\/\.]/g, '_');
+}
+/** Convert raw message object to card object (for feed + modal) */
+function messageToCardObj(m) {
+  const readStatus = m.read || lastStatus[msgId(m)]?.read;
+  return {
+    type:        'message',
+    subject:     m.subject  || '(ללא נושא)',
+    student:     m.student  || null,
+    alertDay:    m.from     ? `${m.from}${m.fromRole ? ` · ${m.fromRole}` : ''}` : null,
+    date:        m.date     || null,
+    alertTime:   m.time     || null,
+    category:    readStatus ? 'נקרא ✓' : 'לא נקרא',
+    description: m.body     || null,
+    _msgRaw:     m,
+  };
 }
 function approvalId(item) {
   if (item.msgId) return 'approval_' + String(item.msgId).replace(/[^a-zA-Z0-9\-_=]/g, '_').slice(0, 100);

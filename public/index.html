@@ -98,7 +98,7 @@
     <div class="error-icon">📡</div>
     <div class="error-text">
       <strong>ממתין לנתונים...</strong>
-      <span>הסורק המקומי לא פעיל. הפעל <code>start_daemon.bat</code> במחשב הבית.</span>
+      <span>אין עדיין נתונים בשרת. אם <code>start_daemon.bat</code> רץ במחשב הבית — הנתונים יישלחו אוטומטית. לחץ <strong>נסה שוב</strong> לרענון.</span>
     </div>
     <button onclick="refresh()" class="btn-retry">נסה שוב</button>
   </div>
@@ -185,7 +185,7 @@
     </div>
   </div>
 
-  <script src="app.js?v=6"></script>
+  <script src="app.js?v=7"></script>
   <script>
     window.onerror = function(msg, url, line, col, err) {
       console.error('App error:', msg, 'at', line + ':' + col, err);
