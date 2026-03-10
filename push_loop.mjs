@@ -51,6 +51,8 @@ if (VPS_URL.includes('/api/push')) VPS_URL = VPS_URL.replace(/\/api\/push.*$/, '
 const PUSH_SECRET     =  process.env.PUSH_SECRET      || 'webtop2026';
 const SCRAPE_INTERVAL = parseInt(process.env.SCRAPE_INTERVAL || '15',  10); // minutes
 const POLL_INTERVAL   = parseInt(process.env.POLL_INTERVAL   || '30',  10); // seconds
+const RETRY_DELAY     = parseInt(process.env.RETRY_DELAY     || '120', 10); // seconds (2 min)
+const MAX_RETRIES     = parseInt(process.env.MAX_RETRIES     || '3',   10); // max consecutive retries
 
 if (!VPS_URL || VPS_URL.includes('your-')) {
   console.error('❌  VPS_URL is not set in .env — cannot start push_loop');
@@ -87,6 +89,63 @@ function runScraper() {
   });
 }
 
+// ─── Data validation after scrape ────────────────────────────────────────────
+function validateScrapeData(data) {
+  const issues = [];
+  const d = data?.data;
+  if (!d) { issues.push('CRITICAL: No data object'); return issues; }
+
+  // Check for login page
+  const links = d.usefulLinks || [];
+  if (links.some(l => (l.href || '').includes('forgotPassword'))) {
+    issues.push('CRITICAL: Data is login page, not dashboard');
+    return issues;
+  }
+
+  // Load expected children
+  let children = [];
+  try {
+    children = JSON.parse(readFileSync(join(__dirname, 'children_config.json'), 'utf8')).children || [];
+  } catch {}
+  const expectedNames = children.map(c => c.name);
+
+  // Per-student data checks
+  const byStudentMaps = ['classEventsByStudent', 'homeworkByStudent', 'gradesByStudent'];
+  for (const mapName of byStudentMaps) {
+    const map = d[mapName] || {};
+    const mapKeys = Object.keys(map);
+    if (mapKeys.length === 0) {
+      issues.push(`WARN: ${mapName} is empty`);
+    }
+    for (const name of expectedNames) {
+      const shortName = name.split(' ').pop();
+      const hasKey = mapKeys.some(k => k === name || k === shortName);
+      if (!hasKey) issues.push(`WARN: ${mapName} missing data for "${name}"`);
+    }
+  }
+
+  // Notifications
+  const notifs = d.notifications || [];
+  if (notifs.length === 0) {
+    issues.push('WARN: Zero notifications');
+  } else {
+    const students = [...new Set(notifs.map(n => n.student))];
+    for (const name of expectedNames) {
+      const shortName = name.split(' ').pop();
+      if (!students.some(s => s === name || s === shortName || name.includes(s))) {
+        issues.push(`WARN: No notifications for "${name}"`);
+      }
+    }
+  }
+
+  // Messages (shared)
+  if (!d.messages || d.messages.length === 0) {
+    issues.push('INFO: No messages (may be normal)');
+  }
+
+  return issues;
+}
+
 // ─── Push data to VPS ────────────────────────────────────────────────────────
 async function pushToVPS(data) {
   const res = await fetch(`${VPS_URL}/api/push`, {
@@ -102,35 +161,56 @@ async function pushToVPS(data) {
   return res.json();
 }
 
-// ─── Scrape + push (one cycle) ───────────────────────────────────────────────
+// ─── Scrape + push (one cycle, with auto-retry) ─────────────────────────────
 let scrapeRunning = false;
-async function scrapeAndPush(reason = 'scheduled') {
-  if (scrapeRunning) {
+async function scrapeAndPush(reason = 'scheduled', attempt = 1) {
+  if (scrapeRunning && attempt === 1) {
     log(`Scrape already in progress — skipping (${reason})`);
     return;
   }
   scrapeRunning = true;
   const start = Date.now();
-  log(`Scraping… (${reason})`);
+  log(`Scraping… (${reason}${attempt > 1 ? `, retry ${attempt}/${MAX_RETRIES}` : ''})`);
   try {
     const data = await runScraper();
     const links = data?.data?.usefulLinks || [];
     const isLoginPage = links.some(l => (l.href || '').includes('forgotPassword'));
     if (isLoginPage) {
       log(`ERROR — Scrape returned login page. Run WEBTOP_CAPTURE=true node webtop_scrape.mjs to re-login.`);
-      return;
+      scrapeRunning = false;
+      return; // no retry — needs manual intervention
     }
     const notifCount = data?.data?.notifications?.length ?? 0;
     log(`Scraper OK — ${notifCount} notifications`);
+
+    // Validate data integrity
+    const issues = validateScrapeData(data);
+    if (issues.length > 0) {
+      for (const issue of issues) log(`[validate] ${issue}`);
+      if (issues.some(i => i.startsWith('CRITICAL'))) {
+        log('Data validation FAILED — not pushing');
+        scrapeRunning = false;
+        return;
+      }
+    } else {
+      log('[validate] All checks passed ✓');
+    }
 
     log(`Pushing to ${VPS_URL}…`);
     const result = await pushToVPS(data);
     const elapsed = ((Date.now() - start) / 1000).toFixed(1);
     log(`Push OK — ${result.count ?? '?'} notifications received by VPS (${elapsed}s)`);
+    scrapeRunning = false;
   } catch (e) {
     log(`ERROR — ${e.message}`);
-  } finally {
-    scrapeRunning = false;
+    if (attempt < MAX_RETRIES) {
+      log(`Retrying in ${RETRY_DELAY}s… (attempt ${attempt + 1}/${MAX_RETRIES})`);
+      await new Promise(r => setTimeout(r, RETRY_DELAY * 1000));
+      await scrapeAndPush(reason, attempt + 1);
+    } else {
+      log(`All ${MAX_RETRIES} attempts failed — will try again at next scheduled interval`);
+      scrapeRunning = false;
+    }
   }
 }
 

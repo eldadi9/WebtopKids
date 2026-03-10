@@ -1,6 +1,6 @@
 {
   "children": [
-    { "name": "גונשרוביץ אמי", "grade": "ב", "birthYear": 2016 },
-    { "name": "גונשרוביץ יולי", "grade": "ג", "birthYear": 2017 }
+    { "name": "גונשרוביץ יולי", "grade": "ג", "birthYear": 2017, "birthday": "04/07" },
+    { "name": "גונשרוביץ אמי", "grade": "ב", "birthYear": 2018, "birthday": "04/12" }
   ]
 }

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(WEBTOP_CAPTURE=true node webtop_scrape.mjs)",
+      "Bash(node -c webtop_scrape.mjs)",
+      "Bash(WEBTOP_DEBUG=1 node webtop_scrape.mjs)",
+      "Bash(node -e \"let d='''';process.stdin.on\\(''data'',c=>d+=c\\);process.stdin.on\\(''end'',\\(\\)=>{const j=JSON.parse\\(d\\);console.log\\(''ok:'',j.ok\\);console.log\\(''notifications:'',j.data?.notifications?.length\\);console.log\\(''messages:'',j.data?.messages?.length\\);console.log\\(''approvals:'',j.data?.approvals?.length\\);console.log\\(''signoffs:'',j.data?.signoffs?.length\\);console.log\\(''classEvents sample:'',j.data?.classEvents?.[0]?.slice\\(0,80\\)\\);console.log\\(''msg sample:'',JSON.stringify\\(j.data?.messages?.[0]\\)\\);console.log\\(''approval sample:'',JSON.stringify\\(j.data?.approvals?.[0]?.title\\)\\);console.log\\(''students:'',j.data?._debug?.studentsFound\\);const types=[...new Set\\(\\(j.data?.notifications||[]\\).map\\(n=>n.type\\)\\)];console.log\\(''notif types:'',types.join\\('', ''\\)\\);const students=[...new Set\\(\\(j.data?.notifications||[]\\).map\\(n=>n.student\\)\\)];console.log\\(''notif students:'',students.join\\('', ''\\)\\)}\\)\")"
+    ]
+  }
+}

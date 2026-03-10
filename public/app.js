@@ -56,6 +56,7 @@ const TYPE_LABEL = {
   late:              '⏰ איחור',
   absence:           '🚫 חיסור',
   grade:             '🏅 ציון',
+  good_word:         '🌟 מילה טובה',
   general:           '📋 כללי',
   message:           '📨 הודעה',
 };
@@ -72,7 +73,7 @@ async function fetchAll(forceRefresh = false) {
       fetch('/api/status', fetchOpts),
       fetch('/api/events', fetchOpts),
       fetch('/api/children', fetchOpts),
-      fetch('/api/insights', fetchOpts),
+      fetch('/api/insights' + (currentStudent ? '?student=' + encodeURIComponent(currentStudent) : ''), fetchOpts),
       fetch('/api/external-links', fetchOpts),
     ]);
     const dataRes = results[0].status === 'fulfilled' ? results[0].value : null;
@@ -166,7 +167,11 @@ function render(data, status) {
   const classEvents   = resolveClassEventsForStudent(d.classEventsByStudent, currentStudent, d.classEvents);
 
   updateStudentSwitcher(notifications);
-  renderStats(notifications, classEvents);
+  // Stats use student-filtered notifications (same as tabs)
+  const visibleForStats = currentStudent
+    ? notifications.filter(n => studentMatch(n.student, currentStudent))
+    : notifications;
+  renderStats(visibleForStats, classEvents);
   renderInsights();
   rerender();
 }
@@ -183,7 +188,7 @@ function rerender() {
   _cardIdx   = 0;
 
   const visible = currentStudent
-    ? notifications.filter(n => n.student === currentStudent)
+    ? notifications.filter(n => studentMatch(n.student, currentStudent))
     : notifications;
 
   renderHomework(visible, lastStatus);
@@ -258,9 +263,18 @@ function updateTabCounts(notifications, classEvents) {
 /* ─── Student switcher (dropdown) ─────────────────────────────────────── */
 function updateStudentSwitcher(notifications) {
   let names = [...new Set(notifications.map(n => n.student).filter(Boolean))];
-  // Fallback: use children_config when we have 2+ children but only 1 in notifications
+  // Fallback: use children_config when we have fewer student names in notifications
   if (names.length < 2 && lastChildren?.children?.length > 1) {
-    names = lastChildren.children.map(c => c.name).filter(Boolean);
+    // Use short names (last word) from children_config to match notification format
+    const configNames = lastChildren.children.map(c => c.name).filter(Boolean);
+    const shortNames = configNames.map(n => n.split(/\s+/).pop());
+    // Prefer notification names when they exist, fill in from config for missing
+    const merged = [];
+    for (let i = 0; i < configNames.length; i++) {
+      const notifMatch = names.find(n => studentMatch(n, configNames[i]));
+      merged.push(notifMatch || shortNames[i]);
+    }
+    names = merged;
   }
   const switcher = document.getElementById('student-switcher');
   const nameEl   = document.getElementById('student-name');
@@ -286,9 +300,9 @@ function updateStudentSwitcher(notifications) {
   }
 
   // Restore from localStorage or pick first child (no "all" option)
-  if (!currentStudent || !names.includes(currentStudent)) {
+  if (!currentStudent || !names.some(n => studentMatch(n, currentStudent))) {
     const saved = localStorage.getItem('webtop_student');
-    currentStudent = (saved && names.includes(saved)) ? saved : names[0];
+    currentStudent = (saved && names.some(n => studentMatch(n, saved))) ? saved : names[0];
   }
 
   // Hide the plain name span — the dropdown shows the name itself
@@ -636,7 +650,7 @@ function hwCard(n, id, done) {
    SECTION: התראות (איחורים / ציוד חסר / חיסורים / אי הכנה)
    ═══════════════════════════════════════════════════════════════ */
 function renderAlerts(notifications) {
-  const ALERT_TYPES = ['late', 'missing_equipment', 'absence', 'homework_not_done'];
+  const ALERT_TYPES = ['good_word', 'late', 'missing_equipment', 'absence', 'homework_not_done'];
   const items = notifications.filter(n => ALERT_TYPES.includes(n.type) && isValidNotification(n));
   const container = document.getElementById('alerts-list');
   if (!container) return;
@@ -648,6 +662,7 @@ function renderAlerts(notifications) {
 
   // Group by type with Hebrew heading
   const GROUP_LABELS = {
+    good_word:         '🌟 מילים טובות',
     late:              '⏰ איחורים',
     missing_equipment: '🎒 ציוד חסר',
     absence:           '🚫 חיסורים',
@@ -1758,22 +1773,36 @@ function parseClassEvent(raw) {
    ═══════════════════════════════════════════════════════════════ */
 const GRADE_MAP = { 'א': 1, 'ב': 2, 'ג': 3, 'ד': 4, 'ה': 5, 'ו': 6, 'ז': 7, 'ח': 8 };
 
+/** Match student name — handles "אמי" vs "גונשרוביץ אמי" format differences */
+function studentMatch(notifName, selectedName) {
+  if (!notifName || !selectedName) return false;
+  const a = notifName.trim();
+  const b = selectedName.trim();
+  if (a === b) return true;
+  // "אמי" matches "גונשרוביץ אמי" — short name is last word of full name
+  if (b.endsWith(' ' + a) || a.endsWith(' ' + b)) return true;
+  // Also handle reverse
+  if (b.includes(a) || a.includes(b)) return true;
+  return false;
+}
+
+/** Generic resolver: find per-student data using fuzzy name matching */
+function resolveForStudent(byStudent, currentStudent, fallback) {
+  if (!byStudent) return fallback || [];
+  if (!currentStudent) return fallback || [];
+  if (byStudent[currentStudent]) return byStudent[currentStudent];
+  const key = Object.keys(byStudent).find(k => studentMatch(k, currentStudent));
+  return key ? byStudent[key] : (fallback || []);
+}
+
 /** Resolve classEvents for currentStudent — handles "אמי" vs "גונשרוביץ אמי" key mismatch */
 function resolveClassEventsForStudent(byStudent, currentStudent, fallback) {
-  if (!byStudent) return fallback || [];
-  if (currentStudent && byStudent[currentStudent]) return byStudent[currentStudent];
-  if (!currentStudent) return fallback || [];
-  const key = Object.keys(byStudent).find(k => k === currentStudent || k.endsWith(' ' + currentStudent));
-  return key ? byStudent[key] : (fallback || []);
+  return resolveForStudent(byStudent, currentStudent, fallback);
 }
 
 /** Resolve schoolEvents for currentStudent */
 function resolveSchoolEventsForStudent(byStudent, currentStudent, fallback) {
-  if (!byStudent) return fallback || [];
-  if (currentStudent && byStudent[currentStudent]) return byStudent[currentStudent];
-  if (!currentStudent) return fallback || [];
-  const key = Object.keys(byStudent).find(k => k === currentStudent || k.endsWith(' ' + currentStudent));
-  return key ? byStudent[key] : (fallback || []);
+  return resolveForStudent(byStudent, currentStudent, fallback);
 }
 
 /** Find child config — handles "אמי" vs "גונשרוביץ אמי" */

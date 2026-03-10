@@ -140,6 +140,7 @@ function parseNotification(raw) {
   else if (text.includes("היעדרות") || text.includes("נעדר")) type = "absence";
   else if (text.includes("איחור")) type = "late";
   else if (text.includes("ציון")) type = "grade";
+  else if (text.includes("מילה טובה")) type = "good_word";
 
   return {
     student,
@@ -166,9 +167,8 @@ function isRealNotification(n, raw) {
   );
 }
 
-// Only keep notifications that are "new" — date within last 7 days or in the future.
-// Homework: only if due date is today or future (לא שיעורי בית שפג תוקף).
-const NEW_NOTIF_DAYS = 7;
+// Only keep notifications within the last 21 days (3 weeks) or in the future.
+const NEW_NOTIF_DAYS = 21;
 function isNewNotification(n) {
   if (!n?.date) return false;
   const [dd, mm, yyyy] = String(n.date).split("/").map(Number);
@@ -177,7 +177,6 @@ function isNewNotification(n) {
   notifDate.setHours(0, 0, 0, 0);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  if (n.type === "homework") return notifDate >= today;
   const cutoff = new Date(today);
   cutoff.setDate(cutoff.getDate() - NEW_NOTIF_DAYS);
   return notifDate >= cutoff;
@@ -186,6 +185,21 @@ function isNewNotification(n) {
 // ── Student switcher helpers ───────────────────────────────────────────────
 // Known non-student option texts (language selector etc.)
 const NON_STUDENT_OPTS = /עברית|English|عربيه|Русский|Pусский|ናይ|ትግርኛ|Українська|forgot|שכחתי/i;
+
+// Reads the currently selected student name from the mat-select dropdown.
+// Returns the selected text, or null if not found.
+async function getCurrentStudent(page) {
+  try {
+    const selects = await page.locator("mat-select").all();
+    for (const matSelect of selects) {
+      const text = (await matSelect.textContent() || "").trim().replace(/\s+/g, " ");
+      if (text && !NON_STUDENT_OPTS.test(text) && text.length > 2 && text.length < 40) {
+        return text;
+      }
+    }
+  } catch {}
+  return null;
+}
 
 // Detects all students from the mat-select dropdown in the portal nav.
 // Returns an array of student name strings, or null if only one student
@@ -211,15 +225,27 @@ async function getAllStudents(page) {
 }
 
 // Switches the portal to show data for a different student.
-// Tries each mat-select until finding one with matching student option (skips language selector).
+// Returns true if switch succeeded, false if not.
 async function switchToStudent(page, name) {
+  // Always start from dashboard for the switch
   if (!page.url().includes("/dashboard")) {
     await page.goto(DASHBOARD_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
-    await sleep(800);
+    await sleep(1500);
+  }
+
+  // Check if already on the right student
+  const current = await getCurrentStudent(page);
+  if (current && (current === name || current.includes(name) || name.includes(current))) {
+    process.stderr.write(`[info] Already on student "${current}" — no switch needed\n`);
+    return true;
   }
 
   const selects = await page.locator("mat-select").all();
   for (const matSelect of selects) {
+    // Read the current value to identify this is the student selector (not language)
+    const selectText = (await matSelect.textContent() || "").trim();
+    if (NON_STUDENT_OPTS.test(selectText)) continue; // skip language selectors
+
     await matSelect.click();
     await sleep(1200);
     const opts = page.locator(".mat-mdc-select-panel mat-option, mat-option");
@@ -234,20 +260,42 @@ async function switchToStudent(page, name) {
     for (const opt of allOpts) {
       const text = (await opt.textContent() || "").trim().replace(/\s+/g, " ");
       if (NON_STUDENT_OPTS.test(text)) continue;
-      if (text === name || text.includes(name)) {
+      if (text === name || text.includes(name) || name.includes(text)) {
         await opt.click();
         clicked = true;
+        process.stderr.write(`[info] Clicked student option: "${text}"\n`);
         break;
       }
     }
     if (clicked) {
       await page.waitForLoadState("networkidle", { timeout: TIMEOUT });
-      await sleep(1000);
-      return;
+      await sleep(2000);
+
+      // Verify the switch actually took effect
+      const afterSwitch = await getCurrentStudent(page);
+      if (afterSwitch && (afterSwitch.includes(name) || name.includes(afterSwitch))) {
+        process.stderr.write(`[info] Switch verified — now on "${afterSwitch}"\n`);
+        return true;
+      }
+      process.stderr.write(`[warn] Switch may have failed — expected "${name}", got "${afterSwitch}"\n`);
+
+      // Retry: reload dashboard and check again
+      await page.goto(DASHBOARD_URL, { waitUntil: "networkidle", timeout: TIMEOUT });
+      await sleep(1500);
+      const afterReload = await getCurrentStudent(page);
+      if (afterReload && (afterReload.includes(name) || name.includes(afterReload))) {
+        process.stderr.write(`[info] Switch confirmed after reload — now on "${afterReload}"\n`);
+        return true;
+      }
+      process.stderr.write(`[warn] Switch failed after retry — still on "${afterReload}"\n`);
+      return false;
     }
     await page.keyboard.press("Escape");
     await sleep(400);
   }
+
+  process.stderr.write(`[warn] Could not find student "${name}" in any dropdown\n`);
+  return false;
 }
 
 // ── Login ─────────────────────────────────────────────────────────────────────
@@ -309,6 +357,19 @@ async function extractDashboard(page) {
     // ── Generic card extractor ──────────────────────────────────────────────
     // Strategy: find heading → walk up past immediate wrappers → get sibling
     // rows or child rows that are NOT the heading itself.
+    // Walk an element's descendant text nodes and join with spaces at element
+    // boundaries so "חיסור" + "יום" → "חיסור יום" instead of "חיסוריום".
+    function spacedText(el) {
+      const parts = [];
+      const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+      let node;
+      while ((node = walk.nextNode())) {
+        const t = node.textContent.trim();
+        if (t) parts.push(t);
+      }
+      return parts.join(" ").replace(/\s+/g, " ").trim();
+    }
+
     function extractCard(titleText) {
       // Find the heading element that contains the title text
       const allElements = Array.from(document.querySelectorAll(
@@ -340,12 +401,12 @@ async function extractDashboard(page) {
 
       if (rows.length > 0) {
         return rows
-          .map(r => r.textContent.trim().replace(/\s+/g, " "))
+          .map(r => spacedText(r))
           .filter(t => t && t !== headingText && t.length > 2);
       }
 
       // Fallback: get all text nodes in card, skip the heading text
-      const allText = card.textContent.trim().replace(/\s+/g, " ");
+      const allText = spacedText(card);
       if (allText === headingText) return [];
       return [allText.replace(headingText, "").trim()].filter(Boolean);
     }
@@ -577,8 +638,8 @@ async function extractSignoffs(page) {
           approvals.push({ label: t.slice(0, 80), details: t, title: t.slice(0, 60), status: "pending", requiredEquipment: [] });
         }
       }
-      return { signoffs, approvals };
-    }
+      // Don't return here — fall through to dedup at end of function
+    } else {
 
     const seenMsgId = new Set();
     for (const it of listItems) {
@@ -631,10 +692,55 @@ async function extractSignoffs(page) {
         approvals[0].requiredEquipment = detail.equipment || [];
       }
     }
+    } // close else (listItems.length > 0)
   } catch (e) {
     if (process.env.WEBTOP_DEBUG === "1") process.stderr.write(`[debug] extractSignoffs: ${e.message}\n`);
   }
-  return { signoffs, approvals };
+
+  // ── Filter navigation noise from signoffs and approvals ───────────────
+  const isNoise = (text) => /ריכוז מידע|תיבת הודעות|כרטיס תלמיד|ספר טלפונים|אחסון קבצים|תמיכה טכנית|יציאה מהמערכת|תפריט ראשי/.test(text || "");
+  const cleanSignoffs = signoffs.filter(s => !isNoise(s.details));
+  const cleanApprovals = approvals.filter(a => !isNoise(a.details || a.label || a.title));
+
+  // ── Deduplicate approvals — same approval appears in 3 variants: ────────
+  // 1. "אד אפלברג דנה (מורה) 23/02/2026 אישור יציאה לטיול"  (initials + sender + date + title)
+  // 2. "אפלברג דנה (מורה) 23/02/2026 אישור יציאה לטיול"      (sender + date + title)
+  // 3. "אישור יציאה לטיול -שכבת ג'"                            (title only)
+  // Normalize by extracting just the core title (after date), falling back to stripping initials.
+  function normApproval(t) {
+    const s = (t || "").replace(/^[א-ת]{1,2}\s+/, "").trim().replace(/\s+/g, " ");
+    // Try to extract just the title after the DD/MM/YYYY date
+    const dateIdx = s.search(/\d{2}\/\d{2}\/\d{4}/);
+    if (dateIdx >= 0) {
+      const afterDate = s.slice(dateIdx + 10).trim();
+      if (afterDate.length >= 10) return afterDate.slice(0, 70);
+    }
+    return s.slice(0, 70);
+  }
+  const seenAppr = new Map();
+  const dedupedApprovals = [];
+  for (const a of cleanApprovals) {
+    const key = normApproval(a.title || a.label || a.details);
+    if (!key || key.length < 10) continue;
+    if (seenAppr.has(key)) continue;
+    seenAppr.set(key, true);
+    // Clean the title: strip initials prefix, keep full sender info
+    a.title = (a.title || "").replace(/^[א-ת]{1,2}\s+/, "").trim().replace(/\s+/g, " ");
+    a.label = (a.label || "").replace(/^[א-ת]{1,2}\s+/, "").trim().replace(/\s+/g, " ");
+    dedupedApprovals.push(a);
+  }
+
+  const dedupedSignoffs = [];
+  const seenSig = new Map();
+  for (const s of cleanSignoffs) {
+    const key = normApproval(s.details);
+    if (!key || key.length < 10) continue;
+    if (seenSig.has(key)) continue;
+    seenSig.set(key, true);
+    dedupedSignoffs.push(s);
+  }
+
+  return { signoffs: dedupedSignoffs, approvals: dedupedApprovals };
 }
 
 // ── Notifications page ────────────────────────────────────────────────────────
@@ -646,17 +752,35 @@ async function extractNotifications(page) {
       notifLink = page.locator("a:has-text('התראות')").first();
     }
     if (!(await notifLink.isVisible({ timeout: 2000 }).catch(() => false))) {
-      if (process.env.WEBTOP_DEBUG === "1") process.stderr.write("[debug] 'התראות' link not found\n");
-      return [];
+      // Fallback: navigate directly to notifications page
+      if (process.env.WEBTOP_DEBUG === "1") process.stderr.write("[debug] 'התראות' link not found — trying direct URL\n");
+      try {
+        await page.goto(`${BASE_URL}/notification`, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+        await sleep(2000);
+      } catch {
+        return [];
+      }
+    } else {
+      await notifLink.click();
+      await page.waitForLoadState("networkidle", { timeout: TIMEOUT });
     }
-    await notifLink.click();
-    await page.waitForLoadState("networkidle", { timeout: TIMEOUT });
     await sleep(800);
 
     const items = await page.evaluate(() => {
+      // spacedText: walk text nodes and join with spaces to avoid concatenated Hebrew
+      function spacedText(el) {
+        const parts = [];
+        const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+        let node;
+        while ((node = walk.nextNode())) {
+          const t = node.textContent.trim();
+          if (t) parts.push(t);
+        }
+        return parts.join(" ").replace(/\s+/g, " ").trim();
+      }
       const sel = "tr, [class*='notification'], [class*='alert'], [class*='row'], [class*='item'], li, mat-row";
       const nodes = Array.from(document.querySelectorAll(sel));
-      return nodes.map(el => el.textContent.trim().replace(/\s+/g, " ")).filter(t => t.length > 20);
+      return nodes.map(el => spacedText(el)).filter(t => t.length > 20);
     });
     return items;
   } catch (e) {
@@ -683,87 +807,221 @@ function parseDateFromSubject(subject) {
 async function extractMessages(page) {
   const messages = [];
   try {
-    let msgLink = page.getByRole("link", { name: /הודעות/ }).first();
-    if (!(await msgLink.isVisible({ timeout: 2000 }).catch(() => false))) {
-      msgLink = page.locator("a:has-text('הודעות')").first();
-    }
-    if (!(await msgLink.isVisible({ timeout: 2000 }).catch(() => false))) {
-      try {
-        await page.goto(`${BASE_URL}/messages`, { waitUntil: "domcontentloaded", timeout: 8000 });
-      } catch {
-        return [];
-      }
-    } else {
-      await msgLink.click();
-      await page.waitForLoadState("networkidle", { timeout: TIMEOUT });
-    }
-    await sleep(800);
+    // Navigate to messages page
+    await page.goto(`${BASE_URL}/Messages`, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+    await sleep(2500);
+
+    // Wait for message list to render (Angular Material table/list)
+    await page.waitForSelector("mat-row, .mat-mdc-row, tr.mat-row, [class*='mail'] tr, table tr", { timeout: 10000 }).catch(() => null);
+    await sleep(1000);
 
     const rows = await page.evaluate(() => {
       const items = [];
-      const sel = "tr, [class*='message'], [class*='mail'], mat-row, .mat-mdc-row, [class*='row']";
-      const rows = document.querySelectorAll(sel);
-      for (const row of rows) {
-        const text = row.textContent.trim().replace(/\s+/g, " ");
-        if (text.length < 20) continue;
-        const cells = row.querySelectorAll("td, [class*='cell'], mat-cell");
-        let from = "", subject = "", date = "", body = "", read = false;
-        if (cells.length >= 2) {
-          from = (cells[0]?.textContent || "").trim();
-          subject = (cells[1]?.textContent || "").trim();
-          if (cells.length >= 3) date = (cells[2]?.textContent || "").trim();
-          if (cells.length >= 4) body = (cells[3]?.textContent || "").trim();
-          const noRead = row.querySelector("[class*='unread'], [class*='bold'], .msg-unread, [class*='Unread']");
-          read = !noRead;
-        } else {
-          const noRead = row.querySelector("[class*='unread'], [class*='bold'], .msg-unread");
-          read = !noRead;
-          subject = text.slice(0, 120);
-        }
-        if (subject || from) items.push({ from, subject, date, body, read });
+
+      // ── Strategy 1: mat-cell based rows (Angular Material table) ──────
+      const matRows = document.querySelectorAll("mat-row, .mat-mdc-row, tr.mat-mdc-row");
+      for (const row of matRows) {
+        const cells = row.querySelectorAll("mat-cell, .mat-mdc-cell, td.mat-mdc-cell, td");
+        if (cells.length < 2) continue;
+        const texts = Array.from(cells).map(c => c.textContent.trim().replace(/\s+/g, " "));
+        // Skip if any cell looks like navigation noise
+        if (texts.some(t => /תפריט ראשי|הגדרות|יציאה מהמערכת|סינון|אפשרויות/.test(t))) continue;
+        // Check for unread: bold font-weight, unread class, or mat-row-bold
+        const style = window.getComputedStyle(row);
+        const isBold = style.fontWeight >= 600 || style.fontWeight === "bold";
+        const hasUnreadClass = row.className.includes("unread") || row.className.includes("bold") || row.className.includes("Unread");
+        const isUnread = isBold || hasUnreadClass;
+        items.push({ cells: texts, read: !isUnread, html: row.innerHTML.slice(0, 200) });
       }
+
+      // ── Strategy 2: regular table rows (fallback) ─────────────────────
+      if (items.length === 0) {
+        const trs = document.querySelectorAll("table tbody tr, table tr");
+        for (const row of trs) {
+          const cells = row.querySelectorAll("td");
+          if (cells.length < 2) continue;
+          const texts = Array.from(cells).map(c => c.textContent.trim().replace(/\s+/g, " "));
+          if (texts.some(t => /תפריט ראשי|הגדרות|יציאה מהמערכת|סינון|אפשרויות/.test(t))) continue;
+          const hasUnreadClass = row.className.includes("unread") || row.className.includes("bold");
+          items.push({ cells: texts, read: !hasUnreadClass });
+        }
+      }
+
       return items;
     });
 
-    // Deduplicate — same subject+date = same message (Webtop sometimes returns duplicates)
-    const seen = new Map();
+    // Parse each row — try to extract sender, date, subject from cells
     for (const r of rows) {
-      let [datePart, timePart] = (r.date || "").split(/\s+/).map((s) => s.trim());
-      if (!datePart) datePart = parseDateFromSubject(r.subject);
-      const key = msgDedupKey({ subject: r.subject, date: datePart });
-      if (seen.has(key)) continue;
-      seen.set(key, true);
+      const cells = r.cells || [];
+      if (cells.length < 2) continue;
 
-      messages.push({
-        from: (r.from || "").trim(),
-        subject: (r.subject || "(ללא נושא)").trim().slice(0, 200),
-        date: datePart || null,
-        time: timePart || null,
-        body: (r.body || "").trim().slice(0, 500),
-        read: !!r.read,
-      });
-    }
+      // Common Webtop patterns for cells:
+      // Pattern A: [sender, subject, date] — 3 cells
+      // Pattern B: [sender, subject] — 2 cells
+      // Pattern C: [initials, sender, date, subject] — 4 cells (with profile initials)
+      let from = "", subject = "", date = "", time = "", body = "";
 
-    // Try to fetch body by clicking first row (Webtop may load body only on click)
-    if (messages.length > 0 && messages.every((m) => !m.body)) {
-      try {
-        const firstRow = page.locator("tr, [class*='message'], mat-row").first();
-        if (await firstRow.isVisible({ timeout: 2000 })) {
-          await firstRow.click();
-          await sleep(1000);
-          const detail = await page.evaluate(() => {
-            const panel = document.querySelector("[class*='detail'], [class*='content'], [class*='body'], .mat-mdc-dialog-content");
-            const bodyEl = panel || document.querySelector("mat-dialog-content, [role='dialog'] .mat-mdc-dialog-content");
-            return (bodyEl?.textContent || "").trim().slice(0, 500);
-          });
-          if (detail && detail.length > 50) {
-            messages[0].body = detail.slice(0, 500);
+      // Find which cell contains a date (DD/MM/YYYY)
+      const dateIdx = cells.findIndex(c => /\d{2}\/\d{2}\/\d{4}/.test(c));
+
+      if (dateIdx >= 0) {
+        const dateMatch = cells[dateIdx].match(/(\d{2}\/\d{2}\/\d{4})/);
+        date = dateMatch ? dateMatch[1] : "";
+        // Time: look for HH:MM near the date
+        const timeMatch = cells[dateIdx].match(/(\d{2}:\d{2})/);
+        time = timeMatch ? timeMatch[1] : "";
+      }
+
+      if (cells.length >= 3) {
+        // Try: cells before date = sender, cells after = subject
+        if (dateIdx === 2) {
+          from = cells[0] || cells[1] || "";
+          subject = cells[1] || "";
+          if (cells[0].length <= 3 && cells[1]) { // first cell is initials (אד, תש)
+            from = cells[1];
+            subject = cells.length > 3 ? cells[3] : "";
+          }
+        } else if (dateIdx === 1) {
+          from = cells[0] || "";
+          subject = cells.length > 2 ? cells[2] : "";
+        } else {
+          // Fallback: first cell sender, last cell or second = subject
+          from = cells[0] || "";
+          subject = cells[cells.length - 1] || cells[1] || "";
+        }
+      } else if (cells.length === 2) {
+        from = cells[0] || "";
+        subject = cells[1] || "";
+      }
+
+      // Clean sender — extract name and role from "מנחם טל (מורה)"
+      let fromRole = "";
+      const roleMatch = from.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+      if (roleMatch) {
+        from = roleMatch[1].trim();
+        fromRole = roleMatch[2].trim();
+      }
+      // Remove 2-letter initials prefix: "תש תורגמן שיר" → "תורגמן שיר"
+      from = from.replace(/^[א-ת]{1,2}\s+/, "").trim();
+
+      // If subject is empty but from contains date+subject pattern, parse it
+      // Pattern: "מנחם טל (מורה) 02/03/2026 שומרים על החוסן בבית"
+      if (!subject && from) {
+        const combo = from.match(/^(.+?)\s+(\d{2}\/\d{2}\/\d{4})\s+(.+)$/);
+        if (combo) {
+          from = combo[1].trim();
+          date = date || combo[2];
+          subject = combo[3].trim();
+          const role2 = from.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+          if (role2) { from = role2[1].trim(); fromRole = role2[2].trim(); }
+          from = from.replace(/^[א-ת]{1,2}\s+/, "").trim();
+        }
+      }
+
+      // If subject still contains embedded "sender date subject" pattern, parse it
+      if (subject && !date) {
+        const embDate = subject.match(/(\d{2}\/\d{2}\/\d{4})/);
+        if (embDate) {
+          date = embDate[1];
+          // Split subject at the date
+          const parts = subject.split(embDate[1]);
+          if (parts.length >= 2) {
+            subject = parts[1].trim() || parts[0].trim();
           }
         }
-      } catch (_) {
-        if (process.env.WEBTOP_DEBUG === "1") process.stderr.write("[debug] Message body click-extract skipped\n");
+      }
+
+      // Skip garbage rows — navigation/sidebar text
+      const fullText = cells.join(" ");
+      if (/תפריט ראשי|הגדרות|יציאה|סינון|אפשרויות נוספות|WEBTOP.*כניסה אחרונה/.test(fullText)) continue;
+      if (/^Webtop\s+תיבת/.test(fullText)) continue; // page title row
+      if (/התיקיות שלי|נכנסות|יוצאות|טיוטות|נמחקו/.test(subject)) continue; // folder tabs
+
+      // Skip if no meaningful subject
+      if (!subject || subject.length < 3) continue;
+
+      messages.push({ from, fromRole, subject: subject.slice(0, 200), date: date || null, time: time || null, body, read: !!r.read });
+    }
+
+    // If mat-row strategy returned nothing, try a text-pattern fallback
+    // Parse raw text nodes that match "SenderName (Role) DD/MM/YYYY Subject"
+    if (messages.length === 0) {
+      const rawItems = await page.evaluate(() => {
+        const results = [];
+        // Look for any element that contains sender+date+subject pattern
+        const allEls = document.querySelectorAll("tr, mat-row, .mat-mdc-row, [class*='row'], [class*='item'], li");
+        for (const el of allEls) {
+          const text = el.textContent.trim().replace(/\s+/g, " ");
+          // Must have a date and reasonable length (real message row)
+          if (text.length < 20 || text.length > 300 || !/\d{2}\/\d{2}\/\d{4}/.test(text)) continue;
+          // Must NOT be navigation noise
+          if (/תפריט ראשי|הגדרות|יציאה|סינון|WEBTOP.*כניסה/.test(text)) continue;
+          // Check read status
+          const style = window.getComputedStyle(el);
+          const isBold = style.fontWeight >= 600 || style.fontWeight === "bold";
+          const hasUnread = el.className.includes("unread") || el.className.includes("bold");
+          results.push({ text, read: !(isBold || hasUnread) });
+        }
+        return results;
+      });
+
+      for (const r of rawItems) {
+        // Parse: "SenderName (Role) DD/MM/YYYY Subject"
+        const m = r.text.match(/^(?:[א-ת]{1,2}\s+)?(.+?)\s*(?:\(([^)]+)\))?\s+(\d{2}\/\d{2}\/\d{4})\s+(.+)$/);
+        if (m) {
+          messages.push({
+            from: m[1].replace(/^[א-ת]{1,2}\s+/, "").trim(),
+            fromRole: m[2] || "",
+            subject: m[4].trim().slice(0, 200),
+            date: m[3],
+            time: null,
+            body: "",
+            read: !!r.read,
+          });
+        }
       }
     }
+
+    // Deduplicate by normalized subject+date
+    const seen = new Map();
+    const deduped = [];
+    for (const m of messages) {
+      const key = msgDedupKey(m);
+      if (seen.has(key)) continue;
+      seen.set(key, true);
+      deduped.push(m);
+    }
+
+    // Try to fetch body by clicking each unread message (up to 3)
+    const needBody = deduped.filter(m => !m.body).slice(0, 3);
+    for (let i = 0; i < needBody.length; i++) {
+      try {
+        const msgSubjShort = (needBody[i].subject || "").slice(0, 30);
+        const clickTarget = page.locator(`mat-row, .mat-mdc-row, tr`).filter({ hasText: msgSubjShort }).first();
+        if (await clickTarget.isVisible({ timeout: 2000 }).catch(() => false)) {
+          await clickTarget.click();
+          await sleep(1500);
+          const detail = await page.evaluate(() => {
+            // Look for message body panel — common selectors for Webtop detail pane
+            const sel = "[class*='msg-body'], [class*='message-body'], [class*='detail-content'], [class*='mail-body'], .msg-content, [class*='content'] p, mat-dialog-content, [role='dialog']";
+            const panel = document.querySelector(sel);
+            if (panel) return panel.textContent.trim().replace(/\s+/g, " ").slice(0, 800);
+            // Fallback: look for a large text block in the right/detail pane
+            const right = document.querySelector("[class*='detail'], [class*='preview'], [class*='reading']");
+            if (right) return right.textContent.trim().replace(/\s+/g, " ").slice(0, 800);
+            return "";
+          });
+          if (detail && detail.length > 10) {
+            needBody[i].body = detail.slice(0, 800);
+          }
+          // Go back to messages list
+          await page.goBack({ waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => null);
+          await sleep(800);
+        }
+      } catch (_) {}
+    }
+
+    return deduped;
   } catch (e) {
     if (process.env.WEBTOP_DEBUG === "1") process.stderr.write(`[debug] extractMessages error: ${e.message}\n`);
   }
@@ -875,10 +1133,19 @@ async function extractMessages(page) {
     } catch {}
   }
 
-  const classEventsByStudent = {};
+  const classEventsByStudent  = {};
   const schoolEventsByStudent = {};
-  let   allNotifications     = [];
-  let   mainDashboard        = null;
+  const homeworkByStudent     = {};
+  const gradesByStudent       = {};
+  let   allNotifications      = [];
+  let   mainDashboard         = null;
+
+  // Helper: store data under both full name and short name (אמי / גונשרוביץ אמי)
+  function storeByStudent(map, fullName, data) {
+    map[fullName] = data;
+    const shortName = fullName.split(/\s+/).pop() || fullName;
+    if (shortName !== fullName) map[shortName] = data;
+  }
 
   // ── Multi-student extraction loop — כל ילדה בנפרד ─────────────────────────
   const loopStudents = (studentList && studentList.length > 1) ? studentList : [null];
@@ -888,11 +1155,31 @@ async function extractMessages(page) {
 
     // Switch portal to this student (skip for single-student accounts)
     if (studentName !== null) {
+      let switchOk = false;
       try {
-        await switchToStudent(page, studentName);
+        switchOk = await switchToStudent(page, studentName);
       } catch (e) {
-        process.stderr.write(`[warn] switchToStudent("${studentName}") failed: ${e.message?.slice(0, 80)} — continuing with current student\n`);
-        await page.goto(DASHBOARD_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+        process.stderr.write(`[warn] switchToStudent("${studentName}") failed: ${e.message?.slice(0, 80)}\n`);
+      }
+
+      if (!switchOk) {
+        process.stderr.write(`[warn] Could not switch to "${studentName}" — retrying after full reload\n`);
+        await page.goto(DASHBOARD_URL, { waitUntil: "networkidle", timeout: TIMEOUT });
+        await sleep(2000);
+        try {
+          switchOk = await switchToStudent(page, studentName);
+        } catch (e2) {
+          process.stderr.write(`[warn] Retry also failed for "${studentName}": ${e2.message?.slice(0, 80)}\n`);
+        }
+        if (!switchOk) {
+          process.stderr.write(`[ERROR] Skipping "${studentName}" — switch failed after retry\n`);
+          continue; // skip this student entirely rather than storing wrong data
+        }
+      }
+
+      // Navigate to dashboard after successful switch
+      if (!page.url().includes("/dashboard")) {
+        await page.goto(DASHBOARD_URL, { waitUntil: "networkidle", timeout: TIMEOUT });
         await sleep(1000);
       }
     }
@@ -901,20 +1188,20 @@ async function extractMessages(page) {
     const dashboard = await extractDashboard(page);
     if (!mainDashboard) mainDashboard = dashboard;
 
-    // Store class events keyed by full name AND short name (אמי / גונשרוביץ אמי)
-    if (studentName !== null) {
-      const events = dashboard.classEvents || [];
-      classEventsByStudent[studentName] = events;
-      const shortName = studentName.split(/\s+/).pop() || studentName;
-      if (shortName !== studentName) classEventsByStudent[shortName] = events;
-    }
+    process.stderr.write(`[info] Extracting data for "${studentName || "(single)"}" — ` +
+      `classEvents: ${(dashboard.classEvents||[]).length}, ` +
+      `homework: ${(dashboard.homework||[]).length}, ` +
+      `grades: ${(dashboard.grades||[]).length}\n`);
 
-    // Extract school events (יומן פגישות) per student — אסיפות הורים וכו'
+    // Store ALL dashboard data per-student (not just classEvents)
     if (studentName !== null) {
+      storeByStudent(classEventsByStudent,  studentName, dashboard.classEvents || []);
+      storeByStudent(homeworkByStudent,     studentName, dashboard.homework    || []);
+      storeByStudent(gradesByStudent,       studentName, dashboard.grades      || []);
+
+      // Extract school events (יומן פגישות) per student — אסיפות הורים וכו'
       const schoolEv = await extractSchoolEvents(page).catch(() => []);
-      schoolEventsByStudent[studentName] = schoolEv;
-      const shortName = studentName.split(/\s+/).pop() || studentName;
-      if (shortName !== studentName) schoolEventsByStudent[shortName] = schoolEv;
+      storeByStudent(schoolEventsByStudent, studentName, schoolEv);
     }
 
     // Extract notifications for this student (navigates to /התראות)
@@ -924,12 +1211,10 @@ async function extractMessages(page) {
       .filter(({ parsed, raw }) => isRealNotification(parsed, raw))
       .map(({ parsed }) => parsed);
 
-    if (process.env.WEBTOP_DEBUG === "1") {
-      process.stderr.write(`[debug] Student: ${studentName || "(single)"} | raw items: ${rawNotifs.length} | passed: ${notifs.length}\n`);
-      if (rawNotifs.length > 0 && notifs.length === 0) {
-        const sample = rawNotifs[0].slice(0, 150);
-        process.stderr.write(`[debug] Sample raw: "${sample}..."\n`);
-      }
+    process.stderr.write(`[info] Student "${studentName || "(single)"}" notifications: ${rawNotifs.length} raw → ${notifs.length} parsed\n`);
+    if (process.env.WEBTOP_DEBUG === "1" && rawNotifs.length > 0 && notifs.length === 0) {
+      const sample = rawNotifs[0].slice(0, 150);
+      process.stderr.write(`[debug] Sample raw: "${sample}..."\n`);
     }
 
     allNotifications.push(...notifs);
@@ -937,11 +1222,11 @@ async function extractMessages(page) {
     // Return to dashboard before switching to next student
     if (studentName !== null && i < loopStudents.length - 1) {
       await page.goto(DASHBOARD_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
-      await sleep(800);
+      await sleep(1000);
     }
   }
 
-  // ── Filter to only NEW notifications (within last 7 days or future) ───────
+  // ── Filter to only NEW notifications (within last 21 days or future) ───────
   allNotifications = allNotifications.filter(isNewNotification);
 
   // ── Deduplicate notifications (same content from multiple students) ───────
@@ -953,18 +1238,16 @@ async function extractMessages(page) {
   }
   allNotifications = Array.from(seenNotifs.values());
 
-  // ── Single-student fallback: map classEvents + schoolEvents to detected student name ──
+  // ── Single-student fallback: map all data to detected student name ──
   if (!studentList || studentList.length <= 1) {
     mainDashboard = mainDashboard || {};
     const uniqueNames = [...new Set(allNotifications.map((n) => n.student).filter(Boolean))];
     const fallbackSchool = await extractSchoolEvents(page).catch(() => []);
     for (const name of uniqueNames) {
-      if (!classEventsByStudent[name]) {
-        classEventsByStudent[name] = mainDashboard.classEvents || [];
-      }
-      if (!schoolEventsByStudent[name]) {
-        schoolEventsByStudent[name] = fallbackSchool;
-      }
+      if (!classEventsByStudent[name])  classEventsByStudent[name]  = mainDashboard.classEvents || [];
+      if (!homeworkByStudent[name])     homeworkByStudent[name]     = mainDashboard.homework    || [];
+      if (!gradesByStudent[name])       gradesByStudent[name]       = mainDashboard.grades      || [];
+      if (!schoolEventsByStudent[name]) schoolEventsByStudent[name] = fallbackSchool;
     }
   }
 
@@ -999,9 +1282,11 @@ async function extractMessages(page) {
     data: {
       studentName:          mainDashboard?.studentName || "",
       classEvents:          mainDashboard?.classEvents || [],   // backward compat (first student)
-      classEventsByStudent,                                      // NEW: per-student class events
-      homework:             mainDashboard?.homework    || [],
-      grades:               mainDashboard?.grades      || [],
+      classEventsByStudent,                                      // per-student class events
+      homework:             mainDashboard?.homework    || [],   // backward compat (first student)
+      homeworkByStudent,                                         // per-student homework
+      grades:               mainDashboard?.grades      || [],   // backward compat (first student)
+      gradesByStudent,                                           // per-student grades
       tables:               mainDashboard?.tables      || [],
       notifications:        allNotifications,
       messages:             messages,

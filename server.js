@@ -133,6 +133,14 @@ function runScraper() {
   });
 }
 
+// ─── Quiet hours — no alerts between 21:00 and 07:00 Israel time ─────────────
+function isQuietHours() {
+  const now = new Date();
+  // Israel is UTC+2 (winter) / UTC+3 (summer) — approximate with +2 offset
+  const israelHour = (now.getUTCHours() + 2) % 24;
+  return israelHour >= 21 || israelHour < 7; // 21:00–07:00
+}
+
 // ─── Telegram ─────────────────────────────────────────────────────────────────
 async function sendTelegram(text) {
   if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) return;
@@ -157,6 +165,7 @@ const ALERT_EMOJI = {
   grade:             '⭐',
   homework_not_done: '📚',
   homework:          '📚',
+  good_word:         '🌟',
 };
 const ALERT_NAME = {
   late:              'איחור',
@@ -165,25 +174,39 @@ const ALERT_NAME = {
   grade:             'ציון חדש',
   homework_not_done: 'שיעורי בית לא הוכנו',
   homework:          'שיעורי בית חדשים',
+  good_word:         'מילה טובה',
 };
 const ALERT_TYPES_SET = new Set([
-  'late', 'absence', 'missing_equipment', 'grade', 'homework_not_done', 'homework',
+  'late', 'absence', 'missing_equipment', 'grade', 'homework_not_done', 'homework', 'good_word',
 ]);
 
 async function sendNewAlerts(newNotifications, prevIds) {
+  if (isQuietHours()) {
+    console.log('[alert] Quiet hours (21:00–07:00) — skipping instant alerts');
+    return;
+  }
+
   for (const n of newNotifications) {
     if (!ALERT_TYPES_SET.has(n.type)) continue;
-    if (prevIds.has(notifId(n))) continue; // not new
+
+    const nId = notifId(n);
+
+    // PERMANENT dedup: already sent this alert before (persists across restarts)
+    if (sentReminders.has(`alert_${nId}`)) continue;
+
+    // Session dedup: already in previous cache batch
+    if (prevIds.has(nId)) continue;
 
     // Skip impossible absences (before 7am — school doesn't open that early)
     if (n.type === 'absence' && n.alertTime) {
       const alertH = parseInt(n.alertTime.split(':')[0], 10);
       if (!isNaN(alertH) && alertH < 7) {
         console.log(`[alert] Skipped impossible absence at ${n.alertTime} — ${n.student}/${n.date}`);
+        sentReminders.add(`alert_${nId}`); saveSentReminders(); // mark so it never retries
         continue;
       }
     }
-    // Skip stale non-grade alerts (>7 days old) — only new notifications
+    // Skip stale non-grade alerts (>7 days old)
     if (n.type !== 'grade' && n.date) {
       const [dd, mm, yyyy] = n.date.split('/').map(Number);
       if (dd && mm && yyyy) {
@@ -191,11 +214,13 @@ async function sendNewAlerts(newNotifications, prevIds) {
         const daysOld = Math.round((Date.now() - nDate.getTime()) / (1000 * 60 * 60 * 24));
         if (daysOld > 7) {
           console.log(`[alert] Skipped stale alert (${daysOld}d old) — ${n.type} / ${n.subject}`);
+          sentReminders.add(`alert_${nId}`); saveSentReminders();
           continue;
         }
-        // Skip homework past due — לא שיעורי בית שכבר עבר מועד הגשה
+        // Skip homework past due
         if (n.type === 'homework' && daysOld > 0) {
           console.log(`[alert] Skipped past-due homework — ${n.subject} / ${n.date}`);
+          sentReminders.add(`alert_${nId}`); saveSentReminders();
           continue;
         }
       }
@@ -213,25 +238,23 @@ async function sendNewAlerts(newNotifications, prevIds) {
       n.lesson   ? `🔢 שיעור ${n.lesson}`              : '',
     ];
 
-    // Grade: extract the numeric score from description
     if (n.type === 'grade') {
       const scoreMatch = (n.description || '').match(/(\d+)/);
       if (scoreMatch) lines.push(`📊 ציון: <b>${scoreMatch[1]}</b>`);
       else if (n.description) lines.push(`📋 ${n.description.slice(0, 200)}`);
     }
-
-    // Homework not done: show what was missing
     if (n.type === 'homework_not_done' && n.description) {
       lines.push(`📋 ${n.description.slice(0, 200)}`);
     }
-
-    // Homework: include task details (homeworkText / description)
     if (n.type === 'homework') {
       if (n.homeworkText) lines.push(`📝 מטלה: ${n.homeworkText.slice(0, 200)}`);
       else if (n.description) lines.push(`📋 ${n.description.slice(0, 200)}`);
     }
 
     await sendTelegram(lines.filter(Boolean).join('\n'));
+    // Mark as permanently sent — will NEVER send this alert again
+    sentReminders.add(`alert_${nId}`);
+    saveSentReminders();
     console.log(`[alert] Sent Telegram for new ${n.type}: ${n.subject} / ${n.student}`);
   }
 }
@@ -244,6 +267,10 @@ async function sendNewAlerts(newNotifications, prevIds) {
 // Called both at push time AND every hour.
 async function checkDeadlines() {
   if (!cache.data?.data?.notifications) return;
+  if (isQuietHours()) {
+    console.log('[deadline] Quiet hours (21:00–07:00) — skipping deadline check');
+    return;
+  }
   const status = loadStatus();
   const now    = new Date();
 
@@ -365,14 +392,17 @@ app.post('/api/push', async (req, res) => {
     const seenMsgKeys = new Set();
     const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
     const normSubject = (s) => norm(s).replace(/^\s*תק\s+/, '').slice(0, 60);
+    const quietNow = isQuietHours();
     for (const m of newMessages) {
-      if (m.read) continue; // already read — skip
+      if (m.read) continue;
       const subjNorm = normSubject(m.subject);
       const msgKey = `msg_|${norm(m.date)}|${subjNorm}`;
       if (sentReminders.has(msgKey) || seenMsgKeys.has(msgKey)) continue;
+      // Always mark as seen (permanent dedup) even during quiet hours
       sentReminders.add(msgKey);
       seenMsgKeys.add(msgKey);
       saveSentReminders();
+      if (quietNow) { console.log(`[messages] Quiet hours — skipped Telegram for "${m.subject}"`); continue; }
       const lines = [
         `📨 <b>הודעה חדשה מהמורה!</b>`,
         ``,
@@ -436,6 +466,67 @@ app.get('/api/status/system', (req, res) => {
   });
 });
 
+// GET /api/health — comprehensive data integrity check
+app.get('/api/health', (req, res) => {
+  const checks = [];
+  const d = cache.data?.data;
+  const cacheAge = cache.data ? Math.round((Date.now() - cache.timestamp) / 1000) : null;
+
+  // 1. Cache freshness
+  if (!cache.data) {
+    checks.push({ name: 'cache', status: 'FAIL', detail: 'No cached data' });
+  } else if (cacheAge > 30 * 60) {
+    checks.push({ name: 'cache', status: 'WARN', detail: `Stale: ${Math.round(cacheAge/60)}min old` });
+  } else {
+    checks.push({ name: 'cache', status: 'OK', detail: `${Math.round(cacheAge/60)}min old` });
+  }
+
+  if (d) {
+    // 2. Login page check
+    const isLogin = (d.usefulLinks || []).some(l => (l.href || '').includes('forgotPassword'));
+    checks.push({ name: 'auth', status: isLogin ? 'FAIL' : 'OK', detail: isLogin ? 'Login page detected' : 'Authenticated' });
+
+    // 3. Per-student data
+    const config = loadChildrenConfig();
+    const expected = (config.children || []).map(c => c.name);
+    for (const name of expected) {
+      const shortName = name.split(' ').pop();
+      for (const mapName of ['classEventsByStudent', 'homeworkByStudent', 'gradesByStudent']) {
+        const map = d[mapName] || {};
+        const keys = Object.keys(map);
+        const has = keys.some(k => k === name || k === shortName);
+        const count = has ? (map[name] || map[shortName] || []).length : 0;
+        checks.push({
+          name: `${mapName.replace('ByStudent','')}_${shortName}`,
+          status: has ? 'OK' : 'WARN',
+          detail: has ? `${count} items` : 'Missing'
+        });
+      }
+    }
+
+    // 4. Notifications per student
+    const notifs = d.notifications || [];
+    checks.push({ name: 'notifications_total', status: notifs.length > 0 ? 'OK' : 'WARN', detail: `${notifs.length} total` });
+    for (const name of expected) {
+      const shortName = name.split(' ').pop();
+      const count = notifs.filter(n => n.student === shortName || n.student === name).length;
+      checks.push({ name: `notifications_${shortName}`, status: count > 0 ? 'OK' : 'WARN', detail: `${count} notifications` });
+    }
+
+    // 5. Messages
+    checks.push({ name: 'messages', status: (d.messages?.length || 0) > 0 ? 'OK' : 'INFO', detail: `${d.messages?.length || 0} messages` });
+  }
+
+  const hasFail = checks.some(c => c.status === 'FAIL');
+  const hasWarn = checks.some(c => c.status === 'WARN');
+  res.json({
+    healthy: !hasFail,
+    status: hasFail ? 'FAIL' : hasWarn ? 'WARN' : 'OK',
+    checks,
+    timestamp: new Date().toISOString()
+  });
+});
+
 // GET /api/events — special events (birthdays, parent meetings)
 app.get('/api/events', (req, res) => { res.json(loadSpecialEvents()); });
 
@@ -472,8 +563,17 @@ app.post('/api/children/:name/photo', express.json({ limit: '10mb' }), (req, res
 });
 
 // GET /api/insights — computed smart summary from current cache + status
+// ?student=אמי — optional filter by student name (fuzzy match)
 app.get('/api/insights', (req, res) => {
-  const notifications = cache.data?.data?.notifications || [];
+  const studentFilter = req.query.student || '';
+  let notifications = cache.data?.data?.notifications || [];
+  if (studentFilter) {
+    notifications = notifications.filter(n => {
+      const s = (n.student || '').trim();
+      const f = studentFilter.trim();
+      return s === f || f.endsWith(' ' + s) || s.endsWith(' ' + f) || f.includes(s) || s.includes(f);
+    });
+  }
   const status        = loadStatus();
   const now           = new Date();
   now.setHours(0, 0, 0, 0);
