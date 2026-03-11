@@ -51,7 +51,9 @@ const USER         = process.env.WEBTOP_USER;
 const PASS         = process.env.WEBTOP_PASS;
 const CAPTURE_MODE = process.env.WEBTOP_CAPTURE === "true";
 const PROFILE_DIR  = resolve(process.env.WEBTOP_PROFILE || ".webtop_profile");
-const HEADLESS     = CAPTURE_MODE ? false : (process.env.WEBTOP_HEADLESS !== "false");
+// Default to HEADED mode — reCAPTCHA blocks headless browsers and invalidates sessions.
+// Set WEBTOP_HEADLESS=true only if reCAPTCHA is not an issue (e.g., after manual login with long session).
+const HEADLESS     = CAPTURE_MODE ? false : (process.env.WEBTOP_HEADLESS === "true");
 const TIMEOUT      = 30_000;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1051,9 +1053,33 @@ async function extractMessages(page) {
   page.setDefaultTimeout(TIMEOUT);
   await page.setViewportSize({ width: 1400, height: 900 });
 
+  // ── Dismiss cookie consent / popups ──────────────────────────────────────
+  async function dismissCookies() {
+    try {
+      // Common cookie consent button patterns (Hebrew + English)
+      const selectors = [
+        'button:has-text("אישור")', 'button:has-text("קבל")', 'button:has-text("אשר")',
+        'button:has-text("Accept")', 'button:has-text("OK")', 'button:has-text("Got it")',
+        '[class*="cookie"] button', '[class*="consent"] button', '[id*="cookie"] button',
+        '[class*="cookie-banner"] button', '[class*="gdpr"] button',
+        '.cc-accept', '.cc-dismiss', '#accept-cookies',
+      ];
+      for (const sel of selectors) {
+        const btn = page.locator(sel).first();
+        if (await btn.isVisible({ timeout: 500 }).catch(() => false)) {
+          await btn.click({ timeout: 2000 }).catch(() => {});
+          process.stderr.write('[info] Dismissed cookie/consent popup\n');
+          await sleep(500);
+          break;
+        }
+      }
+    } catch {}
+  }
+
   // ── Try to go directly to dashboard ───────────────────────────────────────
   await page.goto(DASHBOARD_URL, { waitUntil: "networkidle", timeout: TIMEOUT });
   await sleep(3000);
+  await dismissCookies();
 
   // ── Check if we're logged in (redirected to login = not logged in) ─────────
   const currentUrl = page.url();
@@ -1066,6 +1092,7 @@ async function extractMessages(page) {
       process.exit(1);
     }
     await doLogin(page);
+    await dismissCookies();
   }
 
   if (CAPTURE_MODE) {
@@ -1248,6 +1275,30 @@ async function extractMessages(page) {
       if (!homeworkByStudent[name])     homeworkByStudent[name]     = mainDashboard.homework    || [];
       if (!gradesByStudent[name])       gradesByStudent[name]       = mainDashboard.grades      || [];
       if (!schoolEventsByStudent[name]) schoolEventsByStudent[name] = fallbackSchool;
+    }
+  }
+
+  // ── Build homeworkByStudent from NOTIFICATIONS (reliable) instead of dashboard card (daily-only) ──
+  // The dashboard "נושאי שיעור" card only shows TODAY's schedule — often empty.
+  // Homework notifications contain the full 21-day history with subject, date, and text.
+  // Clear dashboard-sourced homework first (it's unreliable — shows "לא נמצאו נתונים." when empty)
+  for (const key of Object.keys(homeworkByStudent)) delete homeworkByStudent[key];
+  for (const n of allNotifications) {
+    if (n.type !== "homework" || !n.student) continue;
+    const shortName = n.student;
+    // Find matching full name from studentList
+    const fullName = (studentList || []).find(s => s.includes(shortName)) || shortName;
+    const entry = {
+      subject: n.subject || "",
+      date: n.date || "",
+      text: n.homeworkText || n.description || "",
+      lesson: n.lesson || null,
+    };
+    if (!homeworkByStudent[fullName]) homeworkByStudent[fullName] = [];
+    homeworkByStudent[fullName].push(entry);
+    if (shortName !== fullName) {
+      if (!homeworkByStudent[shortName]) homeworkByStudent[shortName] = [];
+      homeworkByStudent[shortName].push(entry);
     }
   }
 

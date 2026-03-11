@@ -223,7 +223,7 @@ function rerender() {
 
 /* ─── Tab count badges ─────────────────────────────────────────────────── */
 function updateTabCounts(notifications, classEvents) {
-  const hw      = notifications.filter(n => n.type === 'homework' && !lastStatus[homeworkId(n)]?.done).length;
+  const hw      = notifications.filter(n => n.type === 'homework' && n.date && isSubjectValid(n.student, n.subject) && !lastStatus[homeworkId(n)]?.done).length;
   const alerts  = notifications.filter(n =>
     ['late','missing_equipment','absence','homework_not_done'].includes(n.type)).length;
   const grades  = notifications.filter(n => n.type === 'grade').length;
@@ -1883,7 +1883,7 @@ function esc(str) {
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 function homeworkId(n) {
-  return `${n.subject || ''}_${n.date || ''}_${n.lesson || ''}`;
+  return `${(n.student || '').trim()}_${(n.subject || '').trim()}_${(n.date || '').trim()}_${(n.lesson || '').toString().trim()}`;
 }
 function msgId(m) {
   const s = `${m.from || ''}|${m.date || ''}|${(m.subject || '').slice(0, 50)}`;

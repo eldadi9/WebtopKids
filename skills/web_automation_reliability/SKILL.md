@@ -183,6 +183,32 @@ Recommended sections:
 7. Reliability Improvements
 8. Proposed Implementation
 
+## Critical: Webtop-Specific Rules (2026-03-10)
+
+### Headless Mode BREAKS Sessions
+- reCAPTCHA detects headless Chromium and invalidates the session token
+- Default MUST be **headed mode** (`WEBTOP_HEADLESS` defaults to false)
+- Only set `WEBTOP_HEADLESS=true` if explicitly testing without reCAPTCHA
+- The persistent browser profile (`.webtop_profile/`) stores cookies/session, but reCAPTCHA clears them in headless
+
+### Cookie Consent Popup
+- webtop.co.il shows a cookie consent popup on first page load after session expiry
+- `dismissCookies()` runs automatically before and after login
+- If consent is not dismissed, the page is blocked and scraping fails
+
+### Dashboard Card Data is UNRELIABLE for Homework
+- The dashboard "נושאי שיעור ושיעורי בית" card only shows TODAY's class schedule
+- If today has no school, it returns "לא נמצאו נתונים."
+- **NEVER rely on dashboard cards for homework data**
+- Use homework-type NOTIFICATIONS instead — they contain 21 days of history with subject, date, and full homework text
+- `homeworkByStudent` is built from notifications, not dashboard
+
+### Session Expiry Pattern
+- Sessions expire within hours (not days)
+- When expired: scraper hits login page → reCAPTCHA blocks auto-submit → timeout
+- Fix: run `WEBTOP_CAPTURE=true node webtop_scrape.mjs` to re-login manually
+- push_loop.mjs detects login page and logs error (does not retry — needs manual intervention)
+
 ## Success Criteria
 This skill succeeds when the user gets:
 - a clear explanation of why the automation is unstable

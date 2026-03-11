@@ -110,10 +110,11 @@ function saveSentReminders() {
 const sentReminders = loadSentReminders(); // ← persisted across restarts
 
 // ─── ID helpers ───────────────────────────────────────────────────────────────
-function hwId(n) { return `${(n.subject || '').trim()}_${(n.date || '').trim()}_${(n.lesson || '')}`; }
-// Normalized — trim all parts to avoid duplicate alerts when scrape returns slight variations
+// Include student in hwId to avoid collision between Ami and Yuli same-subject homework
+function hwId(n) { return `${(n.student || '').trim()}_${(n.subject || '').trim()}_${(n.date || '').trim()}_${(n.lesson || '').toString().trim()}`; }
+// Normalized — trim ALL parts to avoid duplicate alerts when scrape returns slight variations
 function notifId(n) {
-  return `${(n.type || '').trim()}_${(n.student || '').trim()}_${(n.subject || '').trim()}_${(n.date || '').trim()}_${(n.lesson || '')}`;
+  return `${(n.type || '').trim()}_${(n.student || '').trim()}_${(n.subject || '').trim()}_${(n.date || '').trim()}_${(n.lesson || '').toString().trim()}`;
 }
 
 // ─── Scraper runner ───────────────────────────────────────────────────────────
@@ -639,9 +640,10 @@ app.post('/api/homework/done', async (req, res) => {
   const status  = loadStatus();
   const now     = new Date();
   const parts   = id.split('_');
-  const subject = bodySubject || parts[0] || '?';
-  const date    = bodyDate    || parts[1] || '?';
-  const lesson  = bodyLesson  || parts[2] || '?';
+  // hwId format: student_subject_date_lesson
+  const subject = bodySubject || parts[1] || '?';
+  const date    = bodyDate    || parts[2] || '?';
+  const lesson  = bodyLesson  || parts[3] || '?';
 
   const timeStr = now.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
   const dateStr = now.toLocaleDateString('he-IL');
