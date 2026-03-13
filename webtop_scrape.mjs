@@ -51,9 +51,10 @@ const USER         = process.env.WEBTOP_USER;
 const PASS         = process.env.WEBTOP_PASS;
 const CAPTURE_MODE = process.env.WEBTOP_CAPTURE === "true";
 const PROFILE_DIR  = resolve(process.env.WEBTOP_PROFILE || ".webtop_profile");
-// Default to HEADED mode — reCAPTCHA blocks headless browsers and invalidates sessions.
-// Set WEBTOP_HEADLESS=true only if reCAPTCHA is not an issue (e.g., after manual login with long session).
-const HEADLESS     = CAPTURE_MODE ? false : (process.env.WEBTOP_HEADLESS === "true");
+// SILENT BY DEFAULT: run headless so the browser doesn't pop up and interfere with work.
+// Browser only appears when session expired and manual login is needed (reCAPTCHA).
+// WEBTOP_HEADLESS=false forces visible browser for every run (for debugging).
+const HEADLESS     = CAPTURE_MODE ? false : (process.env.WEBTOP_HEADLESS !== "false");
 const TIMEOUT      = 30_000;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -300,23 +301,26 @@ async function switchToStudent(page, name) {
   return false;
 }
 
+// ── Manual login (browser visible — for reCAPTCHA) ────────────────────────────
+// Used when session expired and we need the user to solve CAPTCHA.
+async function doManualLogin(page) {
+  process.stderr.write(
+    "\n>>> Session expired. Browser opened for manual login.\n" +
+    "    Fill username, password, solve CAPTCHA if shown, click כניסה.\n" +
+    "    Waiting up to 10 minutes...\n\n"
+  );
+  await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+  await page.waitForURL(/dashboard/, { timeout: 600_000 }); // 10 minutes
+}
+
 // ── Login ─────────────────────────────────────────────────────────────────────
-async function doLogin(page) {
-  if (CAPTURE_MODE) {
-    // ── CAPTURE MODE: fully manual ───────────────────────────────────────
-    // Just navigate to login page and wait up to 10 minutes for the user
-    // to complete everything (fill form, solve CAPTCHA, click כניסה).
-    process.stderr.write(
-      "\n>>> CAPTCHA MODE: Log in manually in the browser.\n" +
-      "    Fill username, password, solve CAPTCHA, click כניסה.\n" +
-      "    Waiting up to 10 minutes...\n\n"
-    );
-    await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
-    await page.waitForURL(/dashboard/, { timeout: 600_000 }); // 10 minutes
-    return;
+async function doLogin(page, isHeaded = false) {
+  if (CAPTURE_MODE || isHeaded) {
+    // Manual login required — reCAPTCHA blocks auto-fill in headless
+    return doManualLogin(page);
   }
 
-  // ── HEADLESS MODE: auto-fill and submit ──────────────────────────────────
+  // ── HEADLESS + credentials: try auto-fill (may fail if reCAPTCHA) ───────────
   if (!USER || !PASS) throw new Error("WEBTOP_USER / WEBTOP_PASS not set");
 
   await page.goto(LOGIN_URL, { waitUntil: "networkidle", timeout: TIMEOUT });
@@ -1030,26 +1034,29 @@ async function extractMessages(page) {
   return messages;
 }
 
+// ── Launch options (reused for initial + fallback launches) ────────────────────
+const LAUNCH_OPTS = {
+  args: [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-blink-features=AutomationControlled",
+    "--disable-features=TranslateUI",
+  ],
+  userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  locale: "he-IL",
+  timezoneId: "Asia/Jerusalem",
+};
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 (async () => {
   // ── Persistent browser profile ────────────────────────────────────────────
-  // launchPersistentContext stores ALL browser state (cookies, localStorage,
-  // sessionStorage, IndexedDB) in PROFILE_DIR across runs — so the site's JWT
-  // auth token is preserved and reCAPTCHA trust builds up over time.
-  // First-time setup: run with WEBTOP_CAPTURE=true once to log in manually.
-  const context = await chromium.launchPersistentContext(PROFILE_DIR, {
+  // SILENT BY DEFAULT: run headless. Browser only pops up when session expired (reCAPTCHA).
+  let context = await chromium.launchPersistentContext(PROFILE_DIR, {
     headless: HEADLESS,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-blink-features=AutomationControlled",
-    ],
-    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    locale: "he-IL",
-    timezoneId: "Asia/Jerusalem",
+    ...LAUNCH_OPTS,
   });
 
-  const page = await context.newPage();
+  let page = await context.newPage();
   page.setDefaultTimeout(TIMEOUT);
   await page.setViewportSize({ width: 1400, height: 900 });
 
@@ -1091,8 +1098,24 @@ async function extractMessages(page) {
       await context.close();
       process.exit(1);
     }
-    await doLogin(page);
-    await dismissCookies();
+    if (HEADLESS) {
+      // reCAPTCHA blocks headless login. Relaunch headed for manual login only.
+      await context.close();
+      process.stderr.write("\n>>> Session expired. Opening browser for manual login (reCAPTCHA required)...\n>>> Log in, solve CAPTCHA if shown, click כניסה. Waiting up to 10 min.\n\n");
+      context = await chromium.launchPersistentContext(PROFILE_DIR, {
+        headless: false,
+        ...LAUNCH_OPTS,
+      });
+      page = await context.newPage();
+      page.setDefaultTimeout(TIMEOUT);
+      await page.setViewportSize({ width: 1400, height: 900 });
+      await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+      await page.waitForURL(/dashboard/, { timeout: 600_000 });
+      await dismissCookies();
+    } else {
+      await doLogin(page);
+      await dismissCookies();
+    }
   }
 
   if (CAPTURE_MODE) {

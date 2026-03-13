@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0f1e" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="WebtopKids" />
+  <title>WebtopKids 🎒</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css?v=8" />
+</head>
+<body>
+
+  <!-- Pull-to-refresh indicator -->
+  <div id="ptr" class="ptr">
+    <div class="ptr-spinner"></div>
+    <span id="ptr-text">משוך למטה לרענון</span>
+  </div>
+
+  <!-- ══ App logo banner — big, centered, NOT sticky ══ -->
+  <div class="logo-banner">
+    <img src="logo.png" class="logo-banner-img" alt="WebtopKids" onerror="this.style.display='none'" />
+    <span class="logo-banner-name">WebtopKids</span>
+  </div>
+
+  <!-- Loading overlay -->
+  <div id="spinner" class="spinner-overlay">
+    <img src="logo.png" class="loading-logo" alt="WebtopKids" />
+    <div class="spinner"></div>
+    <p>טוען נתונים...</p>
+  </div>
+
+  <!-- Sticky top bar -->
+  <div class="top-bar">
+
+    <!-- Header -->
+    <header class="header">
+      <div class="header-right">
+        <img src="logo.png" class="app-logo" alt="WebtopKids" />
+        <div class="student-info">
+          <span class="app-brand">WebtopKids</span>
+          <div class="student-name-row">
+            <img id="child-photo" class="child-avatar hidden" alt=""
+                 onerror="this.classList.add('hidden')" />
+            <span id="student-name" class="student-name">טוען...</span>
+            <div id="student-switcher" class="student-switcher"></div>
+            <button id="btn-add-photo" class="btn-add-photo">📷 הוספת תמונה</button>
+          </div>
+          <!-- Photo picker popup -->
+          <div id="photo-picker-popup" class="photo-picker-popup hidden">
+            <button class="photo-picker-option" id="photo-pick-gallery">📸 מהגלריה / מצלמה</button>
+            <button class="photo-picker-option" id="photo-pick-file">📂 בחר קובץ</button>
+          </div>
+          <input type="file" id="photo-upload-input"      accept="image/*" style="display:none" />
+          <input type="file" id="photo-upload-file-input" accept="*/*"     style="display:none" />
+        </div>
+      </div>
+      <div class="header-left">
+        <div class="update-block">
+          <span id="data-time"  class="last-update" title="נתונים מהאתר"></span>
+          <span id="sync-time"  class="last-update sync-status" title="בדיקה אחרונה"></span>
+        </div>
+        <button id="btn-theme" class="btn-theme" title="החלף מצב (כהה/בהיר)" aria-label="החלף ערכת נושא">
+          <span class="theme-icon">☀️</span>
+        </button>
+        <button id="btn-refresh" class="btn-refresh" onclick="refresh()" title="רענן נתונים">
+          <span class="refresh-icon">🔄</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Stats bar -->
+    <div class="stats-bar" id="stats-bar"></div>
+
+    <!-- Smart insights bar -->
+    <div class="insights-bar" id="insights-bar"></div>
+
+    <!-- Section tabs — כל לשונית = סוג נתון נפרד -->
+    <nav class="section-tabs" id="section-tabs">
+      <button class="stab active" data-section="homework"  id="tab-homework">📚 שיעורי בית</button>
+      <button class="stab"        data-section="alerts"    id="tab-alerts">⚠️ התראות</button>
+      <button class="stab"        data-section="grades"    id="tab-grades">🏅 ציונים</button>
+      <button class="stab"        data-section="calendar"  id="tab-calendar">📅 יומן</button>
+      <button class="stab"        data-section="approvals" id="tab-approvals">✍️ אישורים</button>
+      <button class="stab"        data-section="messages"  id="tab-messages">📨 הודעות</button>
+      <button class="stab"        data-section="feed"      id="tab-feed">📬 הכל</button>
+      <button class="stab"        data-section="external"  id="tab-external">🔗 אתרים חיצוניים</button>
+    </nav>
+
+  </div>
+
+  <!-- Error / no-data banner -->
+  <div id="error-banner" class="error-banner hidden">
+    <div class="error-icon">📡</div>
+    <div class="error-text">
+      <strong>ממתין לנתונים...</strong>
+      <span>אין עדיין נתונים בשרת. אם <code>start_daemon.bat</code> רץ במחשב הבית — הנתונים יישלחו אוטומטית. לחץ <strong>נסה שוב</strong> לרענון.</span>
+    </div>
+    <button onclick="refresh()" class="btn-retry">נסה שוב</button>
+  </div>
+
+  <!-- ══ SECTION: שיעורי בית ══ -->
+  <section id="section-homework" class="page-section active">
+    <div class="single-col">
+      <div id="hw-list" class="card-list"></div>
+    </div>
+  </section>
+
+  <!-- ══ SECTION: התראות (איחורים / ציוד חסר / חיסורים / אי הכנה) ══ -->
+  <section id="section-alerts" class="page-section hidden">
+    <div class="single-col">
+      <div id="alerts-list" class="card-list"></div>
+    </div>
+  </section>
+
+  <!-- ══ SECTION: ציונים ══ -->
+  <section id="section-grades" class="page-section hidden">
+    <div class="single-col">
+      <div id="grades-list" class="card-list"></div>
+    </div>
+  </section>
+
+  <!-- ══ SECTION: יומן — לוח שנה משולב ══ -->
+  <section id="section-calendar" class="page-section hidden">
+    <div class="single-col">
+      <div id="calendar-list" class="card-list"></div>
+    </div>
+  </section>
+
+  <!-- ══ SECTION: אישורים ══ -->
+  <section id="section-approvals" class="page-section hidden">
+    <div class="single-col">
+      <div id="approvals-list" class="card-list"></div>
+    </div>
+  </section>
+
+  <!-- ══ SECTION: הודעות ══ -->
+  <section id="section-messages" class="page-section hidden">
+    <div class="single-col">
+      <div id="messages-list" class="card-list"></div>
+    </div>
+  </section>
+
+  <!-- ══ SECTION: הכל (פיד מלא) ══ -->
+  <section id="section-feed" class="page-section hidden">
+    <div class="single-col">
+      <div id="feed-list" class="card-list"></div>
+    </div>
+  </section>
+
+  <!-- ══ SECTION: אתרים חיצוניים (טפסים, קישורים) ══ -->
+  <section id="section-external" class="page-section hidden">
+    <div class="single-col">
+      <div id="external-list" class="card-list"></div>
+    </div>
+  </section>
+
+  <!-- ══ CROP MODAL — photo positioning before save ══ -->
+  <div id="crop-modal" class="modal-overlay hidden" style="z-index:300">
+    <div class="crop-sheet">
+      <div class="crop-header">
+        <span class="crop-title">✂️ מיקום התמונה</span>
+        <button id="btn-cancel-crop" class="modal-close">✕</button>
+      </div>
+      <div class="crop-viewport" id="crop-viewport">
+        <img id="crop-img" alt="" draggable="false" />
+      </div>
+      <p class="crop-hint">גרור את התמונה כדי למרכז את הפרצוף בתוך העיגול</p>
+      <div class="crop-actions">
+        <button id="btn-cancel-crop2" class="btn-crop-cancel">ביטול</button>
+        <button id="btn-confirm-crop" class="btn-crop-confirm">✓ שמור תמונה</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ מודל פרטים (bottom sheet) ══ -->
+  <div id="detail-modal" class="modal-overlay hidden">
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <div id="modal-content" class="modal-content"></div>
+    </div>
+  </div>
+
+  <script src="app.js?v=8"></script>
+  <script>
+    window.onerror = function(msg, url, line, col, err) {
+      console.error('App error:', msg, 'at', line + ':' + col, err);
+      var banner = document.getElementById('error-banner');
+      if (banner) {
+        banner.classList.remove('hidden');
+        var strong = banner.querySelector('.error-text strong');
+        if (strong) strong.textContent = 'שגיאה: ' + (err && err.message ? err.message : String(msg).slice(0, 100));
+      }
+    };
+  </script>
+</body>
+</html>
