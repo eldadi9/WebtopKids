@@ -58,48 +58,52 @@ body.theme-light button:focus-visible,
 body.theme-light .stab:focus-visible,
 body.theme-light .tab:focus-visible { outline-color: #2563eb; }
 
-/* ─── Type color variables ─────────────────────────────────────────────── */
+/* ─── Type color variables (Figma Make: purple/pink/orange palette) ────── */
 :root {
-  --c-homework:          #3b82f6;
-  --c-homework-bg:       rgba(59, 130, 246, 0.10);
+  --c-homework:          #8B5CF6;
+  --c-homework-bg:       rgba(139, 92, 246, 0.12);
   --c-hw-not-done:       #f59e0b;
-  --c-hw-not-done-bg:    rgba(245, 158, 11, 0.10);
-  --c-missing:           #8b5cf6;
-  --c-missing-bg:        rgba(139, 92, 246, 0.10);
-  --c-late:              #f97316;
-  --c-late-bg:           rgba(249, 115, 22, 0.10);
-  --c-absence:           #ef4444;
-  --c-absence-bg:        rgba(239, 68, 68, 0.10);
-  --c-grade:             #10b981;
-  --c-grade-bg:          rgba(16, 185, 129, 0.10);
+  --c-hw-not-done-bg:    rgba(245, 158, 11, 0.12);
+  --c-missing:           #F97316;
+  --c-missing-bg:        rgba(249, 115, 22, 0.12);
+  --c-late:              #FBBF24;
+  --c-late-bg:           rgba(251, 191, 36, 0.12);
+  --c-absence:           #EF4444;
+  --c-absence-bg:        rgba(239, 68, 68, 0.12);
+  --c-grade:             #10B981;
+  --c-grade-bg:          rgba(16, 185, 129, 0.12);
+  --c-good-word:         #EC4899;
+  --c-good-word-bg:      rgba(236, 72, 153, 0.12);
   --c-general:           #64748b;
   --c-general-bg:        rgba(100, 116, 139, 0.10);
-  --c-done:              #10b981;
-  --surface-1:           #111827;
-  --surface-2:           #1a2235;
-  --surface-3:           #1e293b;
-  --border:              #1e293b;
-  --border-bright:       #334155;
-  --bg-body:             #0f172a;
-  --text-primary:        #e2e8f0;
-  --text-secondary:      #a8b8cc;
-  --text-muted:          #94a3b8;
+  --c-done:              #10B981;
+  --gradient-header:     linear-gradient(to left, #8B5CF6 0%, #EC4899 50%, #F97316 100%);
+  --gradient-header-light: linear-gradient(to left, #A78BFA 0%, #F472B6 50%, #FB923C 100%);
+  --surface-1:           #1a0a2e;
+  --surface-2:           #0F0A1E;
+  --surface-3:           #2D1F4A;
+  --border:              rgba(167, 139, 250, 0.2);
+  --border-bright:       rgba(167, 139, 250, 0.35);
+  --bg-body:             linear-gradient(180deg, #0F0A1E 0%, #1a0a2e 100%);
+  --text-primary:        #F9FAFB;
+  --text-secondary:      #E5E7EB;
+  --text-muted:          #9CA3AF;
 }
-/* Light theme ───────────────────────────────────────────────────────────── */
+/* Light theme (Figma Make light: pink-tinted) ───────────────────────────── */
 body.theme-light {
   --surface-1:           #ffffff;
-  --surface-2:           #f1f5f9;
-  --surface-3:           #e2e8f0;
-  --border:              #e2e8f0;
-  --border-bright:       #cbd5e1;
-  --bg-body:             #f8fafc;
-  --text-primary:        #1e293b;
+  --surface-2:           #FFF5F7;
+  --surface-3:           #F3F4F6;
+  --border:              rgba(139, 92, 246, 0.12);
+  --border-bright:       rgba(139, 92, 246, 0.25);
+  --bg-body:             linear-gradient(180deg, #FFF5F7 0%, #FFF 100%);
+  --text-primary:        #1a0a2e;
   --text-secondary:      #475569;
-  --text-muted:          #64748b;
-  --c-homework-bg:       rgba(59, 130, 246, 0.12);
+  --text-muted:          #6B7280;
+  --c-homework-bg:       rgba(139, 92, 246, 0.12);
   --c-hw-not-done-bg:   rgba(245, 158, 11, 0.12);
-  --c-missing-bg:        rgba(139, 92, 246, 0.12);
-  --c-late-bg:           rgba(249, 115, 22, 0.12);
+  --c-missing-bg:        rgba(249, 115, 22, 0.12);
+  --c-late-bg:           rgba(251, 191, 36, 0.12);
   --c-absence-bg:        rgba(239, 68, 68, 0.12);
   --c-grade-bg:          rgba(16, 185, 129, 0.12);
   --c-general-bg:        rgba(100, 116, 139, 0.10);
@@ -108,8 +112,8 @@ body.theme-light .hw-text {
   background: rgba(0,0,0,0.04);
   border-color: rgba(0,0,0,0.08);
 }
-body.theme-light .logo-banner { background: linear-gradient(135deg, #e2e8f0 0%, #f1f5f9 100%); }
-body.theme-light .logo-banner-name { color: #3b82f6; }
+body.theme-light .logo-banner { background: linear-gradient(135deg, #FFF5F7 0%, #E9D5FF 100%); }
+body.theme-light .logo-banner-name { color: #8B5CF6; }
 
 /* ─── Pull-to-refresh ──────────────────────────────────────────────────── */
 .ptr {
@@ -181,20 +185,23 @@ body.theme-light .logo-banner-name { color: #3b82f6; }
   position: sticky;
   top: 0;
   z-index: 50;
-  background: var(--surface-1);
-  box-shadow: 0 2px 16px rgba(0,0,0,0.5);
-  transition: background 0.3s ease;
+  background: linear-gradient(90deg, #8b5cf6 0%, #ec4899 50%, #f97316 100%);
+  box-shadow: 0 4px 20px rgba(139, 92, 246, 0.35);
+  transition: background 0.3s ease, box-shadow 0.3s ease;
 }
-body.theme-light .top-bar { box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+body.theme-light .top-bar {
+  background: linear-gradient(90deg, #8b5cf6 0%, #ec4899 50%, #f97316 100%);
+  box-shadow: 0 4px 20px rgba(139, 92, 246, 0.25);
+}
 
 /* ─── Header ───────────────────────────────────────────────────────────── */
 .header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0.6rem 1rem;
-  background: linear-gradient(135deg, var(--surface-1) 0%, var(--surface-2) 100%);
-  border-bottom: 1px solid var(--border);
+  padding: 0.75rem 1rem;
+  background: transparent;
+  border: none;
   gap: 0.75rem;
 }
 .header-right { display: flex; align-items: center; gap: 0.75rem; }
@@ -202,12 +209,13 @@ body.theme-light .top-bar { box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
 
 /* ─── App logo ──────────────────────────────────────────────────────────── */
 .app-logo {
-  width: 46px; height: 46px;
-  border-radius: 12px;
+  width: 40px; height: 40px;
+  border-radius: 14px;
   object-fit: cover;
   flex-shrink: 0;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
-  border: 1px solid rgba(255,255,255,0.08);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+  border: 2px solid rgba(255,255,255,0.5);
+  background: rgba(255,255,255,0.15);
 }
 
 /* ─── Student info ─────────────────────────────────────────────────────── */
@@ -220,7 +228,7 @@ body.theme-light .top-bar { box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
 .app-brand {
   font-size: 0.65rem;
   font-weight: 700;
-  color: #3b82f6;
+  color: rgba(255,255,255,0.95);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   line-height: 1;
@@ -235,18 +243,20 @@ body.theme-light .top-bar { box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
   max-width: 200px;
   direction: rtl;
   unicode-bidi: embed;
+  color: #fff;
 }
 .update-block  { display: flex; flex-direction: column; align-items: flex-end; gap: 0.1rem; }
-.last-update   { font-size: 0.72rem; color: var(--text-muted); white-space: nowrap; }
+.last-update   { font-size: 0.72rem; color: rgba(255,255,255,0.85); white-space: nowrap; }
 
 /* ─── Refresh button (primary action) ────────────────────────────────────── */
 .btn-refresh {
-  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-  border: 1px solid rgba(96, 165, 250, 0.4);
+  background: rgba(255,255,255,0.25);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.4);
   color: #fff;
   padding: 0;
   width: var(--tap-min); min-height: var(--tap-min);
-  border-radius: var(--radius-md);
+  border-radius: 14px;
   cursor: pointer;
   font-family: inherit;
   font-size: 1.2rem;
@@ -254,21 +264,21 @@ body.theme-light .top-bar { box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
   transition: all var(--transition-fast);
   -webkit-tap-highlight-color: transparent;
   flex-shrink: 0;
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.35);
 }
-.btn-refresh:hover  { background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); box-shadow: 0 4px 12px rgba(59, 130, 246, 0.45); }
-.btn-refresh:active { transform: scale(0.94); box-shadow: var(--shadow-card-pressed); }
-.btn-refresh:focus-visible { outline: 3px solid #60a5fa; outline-offset: 2px; }
+.btn-refresh:hover  { background: rgba(255,255,255,0.35); }
+.btn-refresh:active { transform: scale(0.94); }
+.btn-refresh:focus-visible { outline: 3px solid rgba(255,255,255,0.9); outline-offset: 2px; }
 .refresh-icon { line-height: 1; }
 
 /* Theme toggle button */
 .btn-theme {
-  background: var(--surface-3);
-  border: 1px solid var(--border-bright);
-  color: var(--text-primary);
+  background: rgba(255,255,255,0.25);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.4);
+  color: #fff;
   padding: 0;
   width: var(--tap-min); min-height: var(--tap-min);
-  border-radius: var(--radius-md);
+  border-radius: 14px;
   cursor: pointer;
   font-size: 1.2rem;
   display: flex; align-items: center; justify-content: center;
@@ -276,9 +286,9 @@ body.theme-light .top-bar { box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
   -webkit-tap-highlight-color: transparent;
   flex-shrink: 0;
 }
-.btn-theme:hover  { background: var(--border-bright); opacity: 0.9; }
+.btn-theme:hover  { background: rgba(255,255,255,0.35); }
 .btn-theme:active { transform: scale(0.93); }
-.btn-theme:focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; }
+.btn-theme:focus-visible { outline: 2px solid rgba(255,255,255,0.9); outline-offset: 2px; }
 .theme-icon { line-height: 1; }
 
 /* ─── Student switcher pills ───────────────────────────────────────────── */
@@ -309,8 +319,8 @@ body.theme-light .student-pill:hover { background: var(--surface-3); }
 .stats-bar {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
-  padding: 0.5rem 1rem;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
   background: var(--surface-2);
   border-bottom: 1px solid var(--border);
   min-height: 0;
@@ -320,12 +330,13 @@ body.theme-light .student-pill:hover { background: var(--surface-3); }
 .stat-chip {
   display: flex; align-items: center; gap: 0.25rem;
   background: var(--surface-1);
-  border: 1px solid var(--border);
+  border: 2px solid var(--border);
   border-radius: 999px;
-  padding: 0.18rem 0.6rem;
-  font-size: 0.76rem;
-  font-weight: 500;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
   color: var(--text-secondary);
+  box-shadow: var(--shadow-card);
 }
 
 /* ─── Section tabs (main navigation) ──────────────────────────────────── */
@@ -367,11 +378,11 @@ body.theme-light .student-pill:hover { background: var(--surface-3); }
   text-align: center;
   scroll-snap-align: start;
 }
-.stab:focus-visible { outline: 3px solid #3b82f6; outline-offset: 2px; }
-.stab:hover  { color: var(--text-primary); background: rgba(255,255,255,0.08); }
+.stab:focus-visible { outline: 3px solid #8b5cf6; outline-offset: 2px; }
+.stab:hover  { color: var(--text-primary); background: rgba(139, 92, 246, 0.15); }
 body.theme-light .stab { background: rgba(0,0,0,0.04); }
-body.theme-light .stab:hover { background: rgba(0,0,0,0.08); }
-.stab.active { color: #60a5fa; border-color: #3b82f6; background: rgba(59,130,246,0.15); font-weight: 700; }
+body.theme-light .stab:hover { background: rgba(139, 92, 246, 0.12); }
+.stab.active { color: #8b5cf6; border-color: #8b5cf6; background: rgba(139, 92, 246, 0.18); font-weight: 700; }
 
 /* ─── Filter tabs (inside feed section) ────────────────────────────────── */
 .filter-tabs {
@@ -501,6 +512,7 @@ body.theme-light .stab:hover { background: rgba(0,0,0,0.08); }
 .card.type-late              { --card-color: var(--c-late);        background: var(--c-late-bg); }
 .card.type-absence           { --card-color: var(--c-absence);     background: var(--c-absence-bg); }
 .card.type-grade             { --card-color: var(--c-grade);       background: var(--c-grade-bg); }
+.card.type-good_word         { --card-color: var(--c-good-word);   background: var(--c-good-word-bg); }
 .card.type-general           { --card-color: var(--c-general);     background: var(--c-general-bg); }
 
 /* Link cards (קישורים) ── */
@@ -569,6 +581,7 @@ a.link-card:hover { opacity: 0.9; }
 .badge-late              { background: var(--c-late-bg);        color: var(--c-late);        border: 1px solid var(--c-late); }
 .badge-absence           { background: var(--c-absence-bg);     color: var(--c-absence);     border: 1px solid var(--c-absence); }
 .badge-grade             { background: var(--c-grade-bg);       color: var(--c-grade);       border: 1px solid var(--c-grade); }
+.badge-good_word         { background: var(--c-good-word-bg);    color: var(--c-good-word);   border: 1px solid var(--c-good-word); }
 .badge-general           { background: var(--c-general-bg);     color: var(--c-general);     border: 1px solid var(--c-general); }
 
 /* ─── Mark-done button ─────────────────────────────────────────────────── */
