@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=9" />
+  <link rel="stylesheet" href="style.css?v=10" />
 </head>
 <body>
 
@@ -21,8 +21,8 @@
     <span id="ptr-text">משוך למטה לרענון</span>
   </div>
 
-  <!-- ══ App logo banner — big, centered, NOT sticky ══ -->
-  <div class="logo-banner">
+  <!-- ══ App logo banner — hidden in Figma layout (logo in header) ══ -->
+  <div class="logo-banner logo-banner-hidden">
     <img src="logo.png" class="logo-banner-img" alt="WebtopKids" onerror="this.style.display='none'" />
     <span class="logo-banner-name">WebtopKids</span>
   </div>
@@ -37,40 +37,43 @@
   <!-- Sticky top bar -->
   <div class="top-bar">
 
-    <!-- Header -->
-    <header class="header">
-      <div class="header-right">
-        <img src="logo.png" class="app-logo" alt="WebtopKids" />
-        <div class="student-info">
-          <span class="app-brand">WebtopKids</span>
-          <div class="student-name-row">
-            <img id="child-photo" class="child-avatar hidden" alt=""
-                 onerror="this.classList.add('hidden')" />
-            <span id="student-name" class="student-name">טוען...</span>
-            <div id="student-switcher" class="student-switcher"></div>
-            <button id="btn-add-photo" class="btn-add-photo">📷 הוספת תמונה</button>
-          </div>
-          <!-- Photo picker popup -->
-          <div id="photo-picker-popup" class="photo-picker-popup hidden">
-            <button class="photo-picker-option" id="photo-pick-gallery">📸 מהגלריה / מצלמה</button>
-            <button class="photo-picker-option" id="photo-pick-file">📂 בחר קובץ</button>
-          </div>
-          <input type="file" id="photo-upload-input"      accept="image/*" style="display:none" />
-          <input type="file" id="photo-upload-file-input" accept="*/*"     style="display:none" />
-        </div>
-      </div>
-      <div class="header-left">
-        <div class="update-block">
-          <span id="data-time"  class="last-update" title="נתונים מהאתר"></span>
-          <span id="sync-time"  class="last-update sync-status" title="בדיקה אחרונה"></span>
-        </div>
+    <!-- Header — Logo+name CENTER (large), Student RIGHT (large), Icons LEFT -->
+    <header class="header header-figma">
+      <div class="header-icons">
         <button id="btn-theme" class="btn-theme" title="החלף מצב (כהה/בהיר)" aria-label="החלף ערכת נושא">
-          <span class="theme-icon">☀️</span>
+          <span class="theme-icon">🌙</span>
         </button>
         <button id="btn-refresh" class="btn-refresh" onclick="refresh()" title="רענן נתונים">
           <span class="refresh-icon">🔄</span>
         </button>
       </div>
+      <div class="header-center header-logo">
+        <img src="logo.png" class="app-logo" alt="WebtopKids" />
+        <div class="logo-text">
+          <span class="app-brand">WebtopKids <span class="logo-sparkle">✨</span></span>
+          <span class="app-subtitle">פורטל בית הספר</span>
+        </div>
+      </div>
+      <div class="header-right student-info">
+        <div class="student-name-row">
+          <img id="child-photo" class="child-avatar hidden" alt=""
+               onerror="this.classList.add('hidden')" />
+          <span id="student-name" class="student-name">טוען...</span>
+          <div id="student-switcher" class="student-switcher"></div>
+          <button id="btn-add-photo" class="btn-add-photo">📷</button>
+        </div>
+        <div class="update-block update-block-compact">
+          <span id="data-time"  class="last-update" title="נתונים מהאתר"></span>
+          <span id="sync-time"  class="last-update sync-status" title="בדיקה אחרונה"></span>
+        </div>
+      </div>
+      <!-- Photo picker popup (anchored to student area) -->
+      <div id="photo-picker-popup" class="photo-picker-popup hidden">
+        <button class="photo-picker-option" id="photo-pick-gallery">📸 מהגלריה / מצלמה</button>
+        <button class="photo-picker-option" id="photo-pick-file">📂 בחר קובץ</button>
+      </div>
+      <input type="file" id="photo-upload-input"      accept="image/*" style="display:none" />
+      <input type="file" id="photo-upload-file-input" accept="*/*"     style="display:none" />
     </header>
 
     <!-- Stats bar -->
@@ -185,7 +188,7 @@
     </div>
   </div>
 
-  <script src="app.js?v=9"></script>
+  <script src="app.js?v=10"></script>
   <script>
     window.onerror = function(msg, url, line, col, err) {
       console.error('App error:', msg, 'at', line + ':' + col, err);

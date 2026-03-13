@@ -538,27 +538,28 @@ function isValidNotification(n) {
   return true;
 }
 
-/* ─── Stats bar ────────────────────────────────────────────────────────── */
+/* ─── Stats bar — Figma: 4 large cards (הודעות, ציונים, התראות, שיעורי בית) ── */
 function renderStats(notifications, classEvents) {
-  const hw      = notifications.filter(n => n.type === 'homework').length;
-  const hwNot   = notifications.filter(n => n.type === 'homework_not_done').length;
-  const late    = notifications.filter(n => n.type === 'late').length;
-  const absence = notifications.filter(n => n.type === 'absence').length;
-  const missing = notifications.filter(n => n.type === 'missing_equipment').length;
-  const grade   = notifications.filter(n => n.type === 'grade').length;
+  const messages = (lastData?.data?.messages || []).filter(m => !m.read).length;
+  const grades   = notifications.filter(n => n.type === 'grade').length;
+  const alerts   = notifications.filter(n =>
+    ['late', 'missing_equipment', 'absence', 'homework_not_done'].includes(n.type)).length;
+  const homework = notifications.filter(n => n.type === 'homework' && n.date && isSubjectValid(n.student, n.subject))
+    .filter(n => !lastStatus[homeworkId(n)]?.done).length;
 
-  const chips = [
-    hw      ? `📚 ${hw}`      : null,
-    hwNot   ? `⚠️ ${hwNot}`  : null,
-    late    ? `⏰ ${late}`    : null,
-    absence ? `🚫 ${absence}` : null,
-    missing ? `🎒 ${missing}` : null,
-    grade   ? `🏅 ${grade}`   : null,
-    classEvents.length ? `📋 ${classEvents.length}` : null,
-  ].filter(Boolean);
-
-  document.getElementById('stats-bar').innerHTML =
-    chips.map(c => `<span class="stat-chip">${c}</span>`).join('');
+  const cards = [
+    { icon: '📨', num: messages, label: 'הודעות',  cls: 'stat-messages',  section: 'messages' },
+    { icon: '🎓', num: grades,   label: 'ציונים',  cls: 'stat-grades',    section: 'grades' },
+    { icon: '⚠️', num: alerts,   label: 'התראות',  cls: 'stat-alerts',    section: 'alerts' },
+    { icon: '📚', num: homework, label: 'שיעורי בית', cls: 'stat-homework', section: 'homework' },
+  ];
+  document.getElementById('stats-bar').innerHTML = cards.map(c =>
+    `<div class="stat-card ${c.cls}" onclick="navigateTo('${c.section}')" role="button" tabindex="0">
+       <span class="stat-card-icon">${c.icon}</span>
+       <span class="stat-card-num">${c.num}</span>
+       <span class="stat-card-label">${c.label}</span>
+     </div>`
+  ).join('');
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -625,26 +626,32 @@ function hwCard(n, id, done) {
   return `
     <div class="card type-homework${done ? ' done-card' : ''}${urgent ? ' card-urgent' : ''} clickable-card"
          data-card-idx="${idx}" data-hw-id="${esc(id)}">
-      <div class="card-header">
-        <div class="card-title-row">
-          <span class="card-title">${esc(n.subject || '?')}</span>
-          ${dueBadge}${suspectBadge}
+      <div class="card-inner">
+        <div class="card-icon-box">📚</div>
+        <div class="card-content">
+          <div class="card-header">
+            <div class="card-title-row">
+              <span class="card-title">${n.subject ? `שיעורי בית ב${esc(n.subject)}` : 'שיעורי בית'}</span>
+              ${dueBadge}${suspectBadge}
+            </div>
+            <button class="${btnClass}"
+              data-id="${esc(id)}"
+              data-hw-text="${esc(n.homeworkText || '')}"
+              data-student="${esc(n.student || '')}"
+              data-subject="${esc(n.subject || '')}"
+              data-date="${esc(n.date || '')}"
+              data-lesson="${esc(String(n.lesson ?? ''))}"
+              data-alert-day="${esc(n.alertDay || '')}"
+              data-description="${esc((n.description || '').slice(0, 300))}"
+              onclick="event.stopPropagation(); handleMarkDone(this)"
+              ${done ? 'disabled' : ''}>${btnLabel}</button>
+          </div>
+          <div class="card-meta">${esc(meta)}</div>
+          ${n.homeworkText ? `<div class="hw-text">📝 ${esc(n.homeworkText)}</div>` : ''}
+          ${n.date ? `<div class="card-meta">${esc(n.date)} · תאריך יעד: ${esc(n.date)}</div>` : ''}
+          <div class="card-expand-hint">לחץ לפרטים נוספים ›</div>
         </div>
-        <button class="${btnClass}"
-          data-id="${esc(id)}"
-          data-hw-text="${esc(n.homeworkText || '')}"
-          data-student="${esc(n.student || '')}"
-          data-subject="${esc(n.subject || '')}"
-          data-date="${esc(n.date || '')}"
-          data-lesson="${esc(String(n.lesson ?? ''))}"
-          data-alert-day="${esc(n.alertDay || '')}"
-          data-description="${esc((n.description || '').slice(0, 300))}"
-          onclick="handleMarkDone(this)"
-          ${done ? 'disabled' : ''}>${btnLabel}</button>
       </div>
-      <div class="card-meta">${esc(meta)}</div>
-      ${n.homeworkText ? `<div class="hw-text">📝 ${esc(n.homeworkText)}</div>` : ''}
-      <div class="card-expand-hint">לחץ לפרטים נוספים ›</div>
     </div>`;
 }
 
@@ -693,16 +700,23 @@ function alertCard(n) {
     ? fixSpacingForDisplay(n.description).slice(0, 100) + (n.description.length > 100 ? '...' : '')
     : '';
 
+  const iconMap = { good_word: '❤️', late: '⏰', missing_equipment: '⚠️', absence: '🚫', homework_not_done: '⚠️' };
+  const icon = iconMap[n.type] || '📋';
   return `
     <div class="card type-${n.type || 'general'} clickable-card"
          data-card-idx="${idx}" data-hw-id="">
-      <div class="card-header">
-        <span class="card-title">${esc(n.subject || '?')}</span>
-        <span class="badge badge-${n.type || 'general'}">${label}</span>
+      <div class="card-inner">
+        <div class="card-icon-box">${icon}</div>
+        <div class="card-content">
+          <div class="card-header">
+            <span class="card-title">${esc(n.subject || TYPE_LABEL[n.type] || '?')}</span>
+            <span class="badge badge-${n.type || 'general'}">${label}</span>
+          </div>
+          <div class="card-meta">${esc(meta)}</div>
+          ${preview ? `<div class="card-desc">${esc(preview)}</div>` : ''}
+          <div class="card-expand-hint">לחץ לפרטים נוספים ›</div>
+        </div>
       </div>
-        <div class="card-meta">${esc(meta)}</div>
-        ${preview ? `<div class="card-desc">${esc(preview)}</div>` : ''}
-      <div class="card-expand-hint">לחץ לפרטים נוספים ›</div>
     </div>`;
 }
 
@@ -736,16 +750,20 @@ function renderGrades(notifications) {
     return `
       <div class="card type-grade clickable-card"
            data-card-idx="${idx}" data-hw-id="">
-        <div class="card-header">
-          <div class="card-title-row">
-            <span class="card-title">${esc(n.subject || '?')}</span>
-            ${gradeNum ? `<span class="grade-number" style="color:${gradeColor}">${gradeNum}</span>` : ''}
+        <div class="card-inner">
+          <div class="card-icon-box">🎓</div>
+          <div class="card-content">
+            ${gradeNum ? `<span class="grade-badge" style="color:${gradeColor}">${gradeNum}/100</span>` : ''}
+            <div class="card-header">
+              <div class="card-title-row">
+                <span class="card-title">ציון חדש - ${esc(n.subject || '?')}</span>
+              </div>
+            </div>
+            ${n.description ? `<div class="card-desc">${esc(fixSpacingForDisplay(n.description))}</div>` : ''}
+            <div class="card-meta">${esc(n.subject || '')} · ${esc(meta)}</div>
+            <div class="card-expand-hint">לחץ לפרטים נוספים ›</div>
           </div>
-          <span class="badge badge-grade">🏅 ציון</span>
         </div>
-        <div class="card-meta">${esc(meta)}</div>
-        ${n.description ? `<div class="hw-text">${esc(fixSpacingForDisplay(n.description))}</div>` : ''}
-        <div class="card-expand-hint">לחץ לפרטים נוספים ›</div>
       </div>`;
   }).join('');
 }
@@ -1849,26 +1867,31 @@ function renderInsights() {
   const el = document.getElementById('insights-bar');
   if (!el) return;
 
-  if (!lastInsights?.ok) { el.innerHTML = ''; return; }
-
-  const { overduePendingCount, upcoming48hCount, alertsRecentCount,
-          trend, alertsThisWeek, alertsLastWeek } = lastInsights;
   const chips = [];
+  if (lastInsights?.ok) {
+    const { overduePendingCount, upcoming48hCount, alertsRecentCount,
+            trend, alertsThisWeek, alertsLastWeek } = lastInsights;
+    if (overduePendingCount > 0)
+      chips.push(`<span class="insight-chip chip-overdue chip-clickable" onclick="navigateTo('homework')" title="לחץ לשיעורי בית">⏰ ${overduePendingCount} שיעורי בית פגי תוקף ›</span>`);
+    if (upcoming48hCount > 0)
+      chips.push(`<span class="insight-chip chip-soon chip-clickable" onclick="navigateTo('homework')" title="לחץ לשיעורי בית">📅 ${upcoming48hCount} שיעורי בית ב-48 שעות ›</span>`);
+    if (alertsRecentCount > 0)
+      chips.push(`<span class="insight-chip chip-alerts chip-clickable" onclick="navigateTo('alerts')" title="לחץ להתראות">📊 ${alertsRecentCount} התראות השבוע ›</span>`);
+    if (trend === 'up')
+      chips.push(`<span class="insight-chip chip-trend-up">📈 עלייה בהתראות (${alertsThisWeek} vs ${alertsLastWeek} שבוע שעבר)</span>`);
+    else if (trend === 'down')
+      chips.push(`<span class="insight-chip chip-trend-down">📉 ירידה בהתראות (${alertsThisWeek} vs ${alertsLastWeek} שבוע שעבר)</span>`);
+  }
 
-  if (overduePendingCount > 0)
-    chips.push(`<span class="insight-chip chip-overdue chip-clickable" onclick="navigateTo('homework')" title="לחץ לשיעורי בית">⏰ ${overduePendingCount} שיעורי בית פגי תוקף ›</span>`);
-  if (upcoming48hCount > 0)
-    chips.push(`<span class="insight-chip chip-soon chip-clickable" onclick="navigateTo('homework')" title="לחץ לשיעורי בית">📅 ${upcoming48hCount} שיעורי בית ב-48 שעות ›</span>`);
-  if (alertsRecentCount > 0)
-    chips.push(`<span class="insight-chip chip-alerts chip-clickable" onclick="navigateTo('alerts')" title="לחץ להתראות">📊 ${alertsRecentCount} התראות השבוע ›</span>`);
-  if (trend === 'up')
-    chips.push(`<span class="insight-chip chip-trend-up">📈 עלייה בהתראות (${alertsThisWeek} vs ${alertsLastWeek} שבוע שעבר)</span>`);
-  else if (trend === 'down')
-    chips.push(`<span class="insight-chip chip-trend-down">📉 ירידה בהתראות (${alertsThisWeek} vs ${alertsLastWeek} שבוע שעבר)</span>`);
-
-  el.innerHTML = chips.length
-    ? chips.join('')
-    : '<span class="insight-chip chip-ok">✅ הכל תקין</span>';
+  if (chips.length) {
+    el.innerHTML = chips.join('');
+  } else {
+    // Figma: green status banner — "יום שישי - אין שיעורי בית!" on Friday, else "הכל תקין"
+    const now = new Date();
+    const isFriday = now.getDay() === 5;
+    const msg = isFriday ? 'יום שישי - אין שיעורי בית! 😊' : 'הכל תקין ✓';
+    el.innerHTML = `<div class="insight-banner">${msg}</div>`;
+  }
 }
 
 /* ─── Helpers ───────────────────────────────────────────────────────────── */
