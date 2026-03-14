@@ -1955,13 +1955,12 @@ function calcDaysLeft(dateStr) {
   return Math.round((hwDate - now) / (1000 * 60 * 60 * 24));
 }
 
-/* ─── Theme toggle (Light / Dark) ──────────────────────────────────────── */
+/* ─── Theme toggle (Dark / Light) ──────────────────────────────────────── */
 const THEME_KEY = 'webtopkids_theme';
-function getTheme() { return localStorage.getItem(THEME_KEY) || 'light'; }
+function getTheme() { return localStorage.getItem(THEME_KEY) || 'dark'; }
 function setTheme(theme) {
   localStorage.setItem(THEME_KEY, theme);
   document.body.classList.toggle('theme-light', theme === 'light');
-  document.body.classList.toggle('theme-dark',  theme === 'dark');
   const icon = document.querySelector('.theme-icon');
   if (icon) icon.textContent = theme === 'light' ? '🌙' : '☀️';
 }

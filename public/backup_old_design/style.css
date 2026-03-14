@@ -61,37 +61,24 @@ body.theme-light .tab:focus-visible { outline-color: #2563eb; }
 /* ─── Type color variables (Figma Make: purple/pink/orange palette) ────── */
 :root {
   --c-homework:          #8B5CF6;
-  --c-homework-bg:       rgba(139, 92, 246, 0.10);
-  --c-hw-not-done:       #d97706;
-  --c-hw-not-done-bg:    rgba(217, 119, 6, 0.10);
-  --c-missing:           #ea580c;
-  --c-missing-bg:        rgba(234, 88, 12, 0.10);
-  --c-late:              #b45309;
-  --c-late-bg:           rgba(180, 83, 9, 0.10);
-  --c-absence:           #dc2626;
-  --c-absence-bg:        rgba(220, 38, 38, 0.10);
-  --c-grade:             #059669;
-  --c-grade-bg:          rgba(5, 150, 105, 0.10);
-  --c-good-word:         #db2777;
-  --c-good-word-bg:      rgba(219, 39, 119, 0.10);
-  --c-general:           #475569;
-  --c-general-bg:        rgba(71, 85, 105, 0.08);
-  --c-done:              #059669;
-  --gradient-header:     linear-gradient(to left, #7C3AED 0%, #9333ea 50%, #7C3AED 100%);
-  /* ── DEFAULT THEME: Light (matches Figma Make) ── */
-  --surface-1:           #ffffff;
-  --surface-2:           #f8f9fa;
-  --surface-3:           #f1f3f5;
-  --border:              rgba(139, 92, 246, 0.12);
-  --border-bright:       rgba(139, 92, 246, 0.22);
-  --bg-body:             #f8f9fa;
-  --text-primary:        #1a0a2e;
-  --text-secondary:      #374151;
-  --text-muted:          #6B7280;
-}
-
-/* Dark theme ────────────────────────────────────────────────────────────── */
-body.theme-dark {
+  --c-homework-bg:       rgba(139, 92, 246, 0.12);
+  --c-hw-not-done:       #f59e0b;
+  --c-hw-not-done-bg:    rgba(245, 158, 11, 0.12);
+  --c-missing:           #F97316;
+  --c-missing-bg:        rgba(249, 115, 22, 0.12);
+  --c-late:              #FBBF24;
+  --c-late-bg:           rgba(251, 191, 36, 0.12);
+  --c-absence:           #EF4444;
+  --c-absence-bg:        rgba(239, 68, 68, 0.12);
+  --c-grade:             #10B981;
+  --c-grade-bg:          rgba(16, 185, 129, 0.12);
+  --c-good-word:         #EC4899;
+  --c-good-word-bg:      rgba(236, 72, 153, 0.12);
+  --c-general:           #64748b;
+  --c-general-bg:        rgba(100, 116, 139, 0.10);
+  --c-done:              #10B981;
+  --gradient-header:     linear-gradient(to left, #8B5CF6 0%, #EC4899 50%, #F97316 100%);
+  --gradient-header-light: linear-gradient(to left, #A78BFA 0%, #F472B6 50%, #FB923C 100%);
   --surface-1:           #1a0a2e;
   --surface-2:           #0F0A1E;
   --surface-3:           #2D1F4A;
@@ -101,32 +88,25 @@ body.theme-dark {
   --text-primary:        #F9FAFB;
   --text-secondary:      #E5E7EB;
   --text-muted:          #9CA3AF;
+}
+/* Light theme (Figma Make light: pink-tinted) ───────────────────────────── */
+body.theme-light {
+  --surface-1:           #ffffff;
+  --surface-2:           #FFF5F7;
+  --surface-3:           #F3F4F6;
+  --border:              rgba(139, 92, 246, 0.12);
+  --border-bright:       rgba(139, 92, 246, 0.25);
+  --bg-body:             linear-gradient(180deg, #FFF5F7 0%, #FFF 100%);
+  --text-primary:        #1a0a2e;
+  --text-secondary:      #475569;
+  --text-muted:          #6B7280;
   --c-homework-bg:       rgba(139, 92, 246, 0.12);
-  --c-hw-not-done-bg:    rgba(245, 158, 11, 0.12);
+  --c-hw-not-done-bg:   rgba(245, 158, 11, 0.12);
   --c-missing-bg:        rgba(249, 115, 22, 0.12);
   --c-late-bg:           rgba(251, 191, 36, 0.12);
   --c-absence-bg:        rgba(239, 68, 68, 0.12);
   --c-grade-bg:          rgba(16, 185, 129, 0.12);
   --c-general-bg:        rgba(100, 116, 139, 0.10);
-}
-body.theme-dark .hw-text {
-  background: rgba(255,255,255,0.05);
-  border-color: rgba(255,255,255,0.07);
-}
-body.theme-dark .logo-banner { background: linear-gradient(135deg, #0a0f1e 0%, #1a0a2e 100%); }
-body.theme-dark .logo-banner-name { color: #60a5fa; }
-
-/* Light theme explicit (also default) ───────────────────────────────────── */
-body.theme-light {
-  --surface-1:           #ffffff;
-  --surface-2:           #f8f9fa;
-  --surface-3:           #f1f3f5;
-  --border:              rgba(139, 92, 246, 0.12);
-  --border-bright:       rgba(139, 92, 246, 0.22);
-  --bg-body:             #f8f9fa;
-  --text-primary:        #1a0a2e;
-  --text-secondary:      #374151;
-  --text-muted:          #6B7280;
 }
 body.theme-light .hw-text {
   background: rgba(0,0,0,0.04);
@@ -200,18 +180,18 @@ body.theme-light .logo-banner-name { color: #8B5CF6; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ─── Sticky top bar — Figma: purple gradient header ─── */
+/* ─── Sticky top bar — Figma: lighter pink-purple right → deeper purple left ─── */
 .top-bar {
   position: sticky;
   top: 0;
   z-index: 50;
-  background: linear-gradient(135deg, #7C3AED 0%, #9333ea 40%, #a855f7 70%, #c084fc 100%);
-  box-shadow: 0 4px 20px rgba(124, 58, 237, 0.35);
-  transition: background 0.3s ease, box-shadow 0.3s ease;
-}
-body.theme-dark .top-bar {
   background: linear-gradient(to right, #6D28D9 0%, #7C3AED 30%, #A78BFA 60%, #C4B5FD 85%, #E9D5FF 100%);
   box-shadow: 0 4px 24px rgba(109, 40, 217, 0.4);
+  transition: background 0.3s ease, box-shadow 0.3s ease;
+}
+body.theme-light .top-bar {
+  background: linear-gradient(to left, #5B21B6 0%, #7C3AED 40%, #C4B5FD 70%, #EDE9FE 100%);
+  box-shadow: 0 4px 20px rgba(109, 40, 217, 0.3);
 }
 
 /* ─── Header ───────────────────────────────────────────────────────────── */
@@ -349,9 +329,9 @@ body.theme-dark .top-bar {
   margin-top: 0.15rem;
 }
 .student-pill {
-  background: rgba(255,255,255,0.25);
-  border: 1px solid rgba(255,255,255,0.4);
-  color: rgba(255,255,255,0.9);
+  background: var(--surface-3);
+  border: 1px solid var(--border-bright);
+  color: #94a3b8;
   border-radius: 999px;
   padding: 0.18rem 0.55rem;
   font-size: 0.7rem;
@@ -361,18 +341,16 @@ body.theme-dark .top-bar {
   transition: all 0.15s;
   -webkit-tap-highlight-color: transparent;
 }
-.student-pill:hover  { background: rgba(255,255,255,0.35); color: #fff; }
-.student-pill.active { background: rgba(255,255,255,0.9); border-color: transparent; color: #7C3AED; }
-body.theme-dark .student-pill { background: var(--surface-3); border-color: var(--border-bright); color: #94a3b8; }
-body.theme-dark .student-pill:hover { background: #2d3e55; color: var(--text-primary); }
-body.theme-dark .student-pill.active { background: #3b82f6; border-color: #3b82f6; color: #fff; }
+.student-pill:hover  { background: #2d3e55; color: var(--text-primary); }
+body.theme-light .student-pill:hover { background: var(--surface-3); }
+.student-pill.active { background: #3b82f6; border-color: #3b82f6; color: #fff; }
 
-/* ─── Stats bar ── Figma: 4 large solid-color tile cards ─────────────────── */
+/* ─── Stats bar ── Figma: 4 large horizontal cards ─────────────────────── */
 .stats-bar {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 0.5rem;
-  padding: 0.75rem 0.75rem;
+  gap: 0.6rem;
+  padding: 0.75rem 1rem;
   background: var(--surface-2);
   border-bottom: 1px solid var(--border);
   min-height: 0;
@@ -391,51 +369,42 @@ body.theme-dark .student-pill.active { background: #3b82f6; border-color: #3b82f
   box-shadow: var(--shadow-card);
 }
 
-/* Figma stat cards — solid vibrant background, white text, icon top */
+/* Figma stat cards — icon + number + label */
 .stat-card {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.3rem;
-  padding: 0.7rem 0.4rem;
+  gap: 0.35rem;
+  padding: 0.75rem 0.5rem;
   border-radius: var(--radius-lg);
-  min-height: 76px;
+  min-height: 72px;
   cursor: pointer;
-  color: #fff;
   transition: transform var(--transition-fast), box-shadow var(--transition-fast);
   -webkit-tap-highlight-color: transparent;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.12);
 }
-.stat-card:hover  { transform: scale(1.04); box-shadow: 0 6px 18px rgba(0,0,0,0.18); }
-.stat-card:active { transform: scale(0.97); }
-.stat-card-icon  { font-size: 1.35rem; line-height: 1; }
-.stat-card-num   { font-size: 1.6rem; font-weight: 800; line-height: 1; }
-.stat-card-label { font-size: 0.72rem; font-weight: 700; opacity: 0.92; letter-spacing: 0.01em; }
+.stat-card:hover { transform: scale(1.02); box-shadow: var(--shadow-card-hover); }
+.stat-card-icon { font-size: 1.4rem; line-height: 1; }
+.stat-card-num { font-size: 1.5rem; font-weight: 800; line-height: 1; }
+.stat-card-label { font-size: 0.75rem; font-weight: 600; opacity: 0.95; }
+.stat-card.stat-messages  { background: rgba(249, 115, 22, 0.2); color: #fdba74; }
+.stat-card.stat-grades    { background: rgba(59, 130, 246, 0.2); color: #93c5fd; }
+.stat-card.stat-alerts    { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }
+.stat-card.stat-homework  { background: rgba(139, 92, 246, 0.2); color: #c4b5fd; }
+body.theme-light .stat-card.stat-messages  { background: rgba(249, 115, 22, 0.25); color: #c2410c; }
+body.theme-light .stat-card.stat-grades    { background: rgba(59, 130, 246, 0.25); color: #1d4ed8; }
+body.theme-light .stat-card.stat-alerts    { background: rgba(239, 68, 68, 0.25); color: #b91c1c; }
+body.theme-light .stat-card.stat-homework  { background: rgba(139, 92, 246, 0.25); color: #6d28d9; }
 
-/* Figma colors: homework=purple, alerts=orange-red, grades=cyan-blue, messages=pink */
-.stat-card.stat-homework  { background: linear-gradient(135deg, #7C3AED 0%, #8B5CF6 100%); }
-.stat-card.stat-alerts    { background: linear-gradient(135deg, #ea580c 0%, #f97316 100%); }
-.stat-card.stat-grades    { background: linear-gradient(135deg, #0284c7 0%, #38bdf8 100%); }
-.stat-card.stat-messages  { background: linear-gradient(135deg, #9333ea 0%, #c084fc 100%); }
-.stat-card.stat-unread    { background: linear-gradient(135deg, #db2777 0%, #f472b6 100%); }
-
-/* Dark theme stat cards — slightly muted */
-body.theme-dark .stat-card.stat-homework { background: rgba(139, 92, 246, 0.25); color: #c4b5fd; box-shadow: none; }
-body.theme-dark .stat-card.stat-alerts   { background: rgba(249, 115, 22, 0.25); color: #fdba74; box-shadow: none; }
-body.theme-dark .stat-card.stat-grades   { background: rgba(59, 130, 246, 0.25);  color: #93c5fd; box-shadow: none; }
-body.theme-dark .stat-card.stat-messages { background: rgba(147, 51, 234, 0.25);  color: #d8b4fe; box-shadow: none; }
-body.theme-dark .stat-card.stat-unread   { background: rgba(219, 39, 119, 0.25);  color: #f9a8d4; box-shadow: none; }
-
-/* ─── Section tabs — Figma: icon above label, active bottom-underline ────── */
+/* ─── Section tabs — Figma: icon above label, active purple pill ─────────── */
 .section-tabs {
   display: flex;
   flex-wrap: nowrap;
   justify-content: flex-start;
-  gap: 0;
-  padding: 0 0.5rem;
-  background: #fff;
-  border-bottom: 2px solid var(--border);
+  gap: 0.25rem;
+  padding: 0.5rem 0.75rem 0.75rem;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
   -webkit-overflow-scrolling: touch;
   overflow-x: auto;
   overflow-y: hidden;
@@ -445,37 +414,35 @@ body.theme-dark .stat-card.stat-unread   { background: rgba(219, 39, 119, 0.25);
   -webkit-mask-image: linear-gradient(to left, transparent 0%, black 24px, black calc(100% - 24px), transparent 100%);
 }
 .section-tabs::-webkit-scrollbar { display: none; }
-body.theme-dark .section-tabs { background: var(--surface-2); border-bottom-color: var(--border); }
 .stab {
   flex: 0 0 auto;
-  min-width: 60px;
+  min-width: 64px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.18rem;
+  gap: 0.2rem;
   background: transparent;
   border: none;
-  border-bottom: 3px solid transparent;
-  margin-bottom: -2px;
+  border-radius: var(--radius-full);
   color: var(--text-muted);
-  padding: 0.55rem 0.55rem 0.45rem;
+  padding: 0.4rem 0.6rem;
   font-family: inherit;
-  font-size: 0.68rem;
+  font-size: 0.7rem;
   font-weight: 600;
   cursor: pointer;
-  transition: color var(--transition-fast), border-color var(--transition-fast);
+  transition: color var(--transition-fast), background var(--transition-fast);
   -webkit-tap-highlight-color: transparent;
   min-height: var(--tap-min);
   text-align: center;
   scroll-snap-align: start;
 }
-.stab .stab-icon { font-size: 1.15rem; line-height: 1; }
+.stab .stab-icon { font-size: 1.2rem; line-height: 1; }
 .stab:focus-visible { outline: 3px solid #8b5cf6; outline-offset: 2px; }
-.stab:hover { color: #8b5cf6; }
-.stab.active { color: #7C3AED; border-bottom-color: #7C3AED; font-weight: 700; }
-body.theme-dark .stab { color: var(--text-muted); }
-body.theme-dark .stab:hover { color: var(--text-primary); background: rgba(139, 92, 246, 0.12); }
-body.theme-dark .stab.active { color: #c4b5fd; background: rgba(139, 92, 246, 0.15); border-bottom-color: #8b5cf6; }
+.stab:hover { color: var(--text-primary); background: rgba(139, 92, 246, 0.12); }
+body.theme-light .stab { color: var(--text-secondary); }
+body.theme-light .stab:hover { background: rgba(139, 92, 246, 0.15); }
+.stab.active { color: #fff; background: rgba(139, 92, 246, 0.9); font-weight: 700; }
+body.theme-light .stab.active { color: #fff; background: #8b5cf6; }
 
 /* ─── Filter tabs (inside feed section) ────────────────────────────────── */
 .filter-tabs {
@@ -525,22 +492,21 @@ body.theme-dark .stab.active { color: #c4b5fd; background: rgba(139, 92, 246, 0.
   display: flex;
   align-items: center;
   gap: 1rem;
-  background: rgba(220, 38, 38, 0.08);
-  border-bottom: 1px solid rgba(220, 38, 38, 0.2);
-  color: #dc2626;
+  background: rgba(239, 68, 68, 0.08);
+  border-bottom: 1px solid rgba(239, 68, 68, 0.25);
+  color: #fca5a5;
   padding: 0.75rem 1rem;
   font-size: 0.83rem;
 }
-body.theme-dark .error-banner { background: rgba(239,68,68,0.08); color: #fca5a5; border-color: rgba(239,68,68,0.25); }
 .error-banner.hidden { display: none; }
 .error-icon { font-size: 1.4rem; flex-shrink: 0; }
 .error-text { display: flex; flex-direction: column; gap: 0.2rem; flex: 1; }
 .error-text strong { font-weight: 700; }
 .error-text code { font-family: monospace; font-size: 0.8rem; color: #f87171; }
 .btn-retry {
-  background: rgba(220,38,38,0.10);
-  border: 1px solid rgba(220,38,38,0.3);
-  color: #dc2626;
+  background: rgba(239,68,68,0.15);
+  border: 1px solid rgba(239,68,68,0.35);
+  color: #fca5a5;
   padding: 0.35rem 0.75rem;
   border-radius: 8px;
   cursor: pointer;
@@ -584,48 +550,30 @@ body.theme-dark .error-banner { background: rgba(239,68,68,0.08); color: #fca5a5
 
 .card-list { display: flex; flex-direction: column; gap: var(--space-lg); }
 
-/* ─── Cards ── Figma: white bg, colored right border + accent bg tint ──── */
+/* ─── Cards ────────────────────────────────────────────────────────────── */
 .card {
-  background: #ffffff;
+  background: var(--surface-2);
   border-radius: var(--radius-xl);
   padding: var(--space-xl) var(--space-2xl);
-  border: 1px solid rgba(0,0,0,0.07);
-  border-right: 4px solid var(--card-color, #64748b);
-  box-shadow: 0 1px 8px rgba(0,0,0,0.06);
+  border-right: 5px solid var(--card-color, #64748b);
+  border: 1px solid var(--border);
+  border-right: 5px solid var(--card-color, #64748b);
+  box-shadow: var(--shadow-card);
   transition: opacity var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
 }
-.card:hover { transform: translateX(-3px); box-shadow: 0 4px 18px rgba(0,0,0,0.10); }
+.card:hover { transform: translateX(-3px); box-shadow: var(--shadow-card-hover); }
 @media (hover: none) {
   .card:active { transform: scale(0.98); box-shadow: var(--shadow-card-pressed); }
 }
 
-/* Dark mode cards restore old behavior */
-body.theme-dark .card {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-right: 5px solid var(--card-color, #64748b);
-  box-shadow: var(--shadow-card);
-}
-body.theme-dark .card:hover { transform: translateX(-3px); box-shadow: var(--shadow-card-hover); }
-
-.card.type-homework          { --card-color: var(--c-homework);    background: rgba(139, 92, 246, 0.05); }
-.card.type-homework_not_done { --card-color: var(--c-hw-not-done); background: rgba(217, 119, 6, 0.05); }
-.card.type-missing_equipment { --card-color: var(--c-missing);     background: rgba(234, 88, 12, 0.05); }
-.card.type-late              { --card-color: var(--c-late);        background: rgba(180, 83, 9, 0.05); }
-.card.type-absence           { --card-color: var(--c-absence);     background: rgba(220, 38, 38, 0.05); }
-.card.type-grade             { --card-color: var(--c-grade);       background: rgba(5, 150, 105, 0.05); }
-.card.type-good_word         { --card-color: var(--c-good-word);   background: rgba(219, 39, 119, 0.05); }
-.card.type-general           { --card-color: var(--c-general);     background: rgba(71, 85, 105, 0.04); }
-
-/* Dark mode card type colors */
-body.theme-dark .card.type-homework          { background: var(--c-homework-bg); }
-body.theme-dark .card.type-homework_not_done { background: var(--c-hw-not-done-bg); }
-body.theme-dark .card.type-missing_equipment { background: var(--c-missing-bg); }
-body.theme-dark .card.type-late              { background: var(--c-late-bg); }
-body.theme-dark .card.type-absence           { background: var(--c-absence-bg); }
-body.theme-dark .card.type-grade             { background: var(--c-grade-bg); }
-body.theme-dark .card.type-good_word         { background: var(--c-good-word-bg); }
-body.theme-dark .card.type-general           { background: var(--c-general-bg); }
+.card.type-homework          { --card-color: var(--c-homework);    background: var(--c-homework-bg); }
+.card.type-homework_not_done { --card-color: var(--c-hw-not-done); background: var(--c-hw-not-done-bg); }
+.card.type-missing_equipment { --card-color: var(--c-missing);     background: var(--c-missing-bg); }
+.card.type-late              { --card-color: var(--c-late);        background: var(--c-late-bg); }
+.card.type-absence           { --card-color: var(--c-absence);     background: var(--c-absence-bg); }
+.card.type-grade             { --card-color: var(--c-grade);       background: var(--c-grade-bg); }
+.card.type-good_word         { --card-color: var(--c-good-word);   background: var(--c-good-word-bg); }
+.card.type-general           { --card-color: var(--c-general);     background: var(--c-general-bg); }
 
 /* Figma: card with icon box on right (RTL) */
 .card-inner {
@@ -673,8 +621,8 @@ a.link-card:hover { opacity: 0.9; }
 .done-card .card-title { text-decoration: line-through; color: var(--text-muted); }
 
 .card-meta {
-  font-size: 0.82rem;
-  color: var(--text-muted);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-sm);
@@ -892,14 +840,11 @@ a.link-card:hover { opacity: 0.9; }
    ═══════════════════════════════════════════════════════════════════ */
 
 /* ─── Timestamps ────────────────────────────────────────────────── */
-.sync-status { color: #7C3AED !important; }   /* purple tint for sync time */
-body.theme-dark .sync-status { color: #60a5fa !important; }
+.sync-status { color: #3b82f6 !important; }   /* blue tint for sync time */
 
 /* ─── Tab: data indicator ───────────────────────────────────────── */
-.stab.tab-has-data { color: #7C3AED; font-weight: 700; }
-.stab.tab-has-data.active { color: #7C3AED; }
-body.theme-dark .stab.tab-has-data { color: #93c5fd; }
-body.theme-dark .stab.tab-has-data.active { color: #60a5fa; }
+.stab.tab-has-data { color: #93c5fd; }
+.stab.tab-has-data.active { color: #60a5fa; }
 
 /* ─── Clickable card ────────────────────────────────────────────── */
 .clickable-card {
@@ -931,20 +876,14 @@ body.theme-dark .stab.tab-has-data.active { color: #60a5fa; }
   animation: pulse-badge 1.8s ease-in-out infinite;
 }
 .due-today {
-  background: rgba(220, 38,  38,  0.12);
-  color:       #dc2626;
-  border:      1px solid rgba(220, 38, 38, 0.3);
+  background: rgba(239, 68,  68,  0.18);
+  color:       #f87171;
+  border:      1px solid rgba(239, 68, 68, 0.5);
 }
 .due-soon {
-  background: rgba(234, 88,  12,  0.12);
-  color:       #ea580c;
-  border:      1px solid rgba(234, 88, 12, 0.3);
-}
-body.theme-dark .due-today {
-  background: rgba(239,68,68,0.18);   color: #f87171; border-color: rgba(239,68,68,0.5);
-}
-body.theme-dark .due-soon {
-  background: rgba(249,115,22,0.18);  color: #fb923c; border-color: rgba(249,115,22,0.45);
+  background: rgba(249, 115, 22, 0.18);
+  color:       #fb923c;
+  border:      1px solid rgba(249, 115, 22, 0.45);
 }
 @keyframes pulse-badge {
   0%, 100% { opacity: 1; }
@@ -959,19 +898,19 @@ body.theme-dark .due-soon {
 /* ─── Expand hint ───────────────────────────────────────────────── */
 .card-expand-hint {
   font-size: 0.7rem;
-  color: var(--text-muted);
+  color: #334155;
   margin-top: 0.45rem;
   text-align: left;
   letter-spacing: 0.01em;
   transition: color 0.15s;
 }
-.clickable-card:hover .card-expand-hint { color: var(--text-secondary); }
+.clickable-card:hover .card-expand-hint { color: #475569; }
 
 /* ─── Group titles (alerts section) ────────────────────────────── */
 .group-title {
   font-size: 0.82rem;
   font-weight: 700;
-  color: var(--text-muted);
+  color: #64748b;
   padding: 0.6rem 0 0.25rem;
   border-bottom: 1px solid var(--border);
   margin: 0.25rem 0 0.1rem;
@@ -1037,7 +976,7 @@ body.theme-dark .due-soon {
 .modal-handle {
   width: 40px;
   height: 4px;
-  background: var(--border-bright);
+  background: #334155;
   border-radius: 2px;
   margin: 0.65rem auto 0;
   flex-shrink: 0;
@@ -1123,7 +1062,7 @@ body.theme-dark .due-soon {
 }
 
 .modal-key {
-  color: var(--text-muted);
+  color: #64748b;
   font-weight: 600;
   white-space: nowrap;
   flex-shrink: 0;
@@ -1131,14 +1070,14 @@ body.theme-dark .due-soon {
 }
 
 .modal-val {
-  color: var(--text-secondary);
+  color: #cbd5e1;
   word-break: break-word;
 }
 
 /* ─── Modal content boxes (homework text + description) ─────────── */
 .modal-box {
-  background: var(--surface-3);
-  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.07);
   border-radius: 10px;
   padding: 0.75rem 0.9rem;
   margin-bottom: 0.75rem;
@@ -1155,14 +1094,14 @@ body.theme-dark .due-soon {
 
 .modal-box-text {
   font-size: 0.9rem;
-  color: var(--text-secondary);
+  color: #e2e8f0;
   line-height: 1.6;
 }
 
 .hw-text-lg {
   font-size: 1rem;
   font-weight: 600;
-  color: var(--text-primary);
+  color: #f1f5f9;
 }
 
 .modal-box-desc {
@@ -1207,16 +1146,15 @@ body.theme-dark .due-soon {
 .cal-date-header {
   font-size: 0.78rem;
   font-weight: 800;
-  color: var(--text-muted);
+  color: #64748b;
   padding: 0.2rem 0.5rem;
-  border-right: 3px solid var(--border-bright);
+  border-right: 3px solid #334155;
   letter-spacing: 0.02em;
   text-transform: uppercase;
   margin-bottom: 0.1rem;
 }
-.cal-day-today .cal-date-header  { color: #7C3AED; border-right-color: #7C3AED; font-size: 0.83rem; }
-.cal-day-past  .cal-date-header  { color: var(--text-muted); opacity: 0.6; }
-body.theme-dark .cal-day-today .cal-date-header { color: #60a5fa; border-right-color: #3b82f6; }
+.cal-day-today .cal-date-header  { color: #60a5fa; border-right-color: #3b82f6; font-size: 0.83rem; }
+.cal-day-past  .cal-date-header  { color: #374151; border-right-color: #1e293b; }
 .cal-day-past  .card             { opacity: 0.45; }
 .cal-day-past  .clickable-card:hover { transform: none; }
 
@@ -1255,38 +1193,36 @@ body.theme-dark .cal-day-today .cal-date-header { color: #60a5fa; border-right-c
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   SMART INSIGHTS BAR — Figma: prominent green full-width banner
+   SMART INSIGHTS BAR — Figma: green status banner
    ═══════════════════════════════════════════════════════════════════ */
 .insights-bar {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
-  padding: 0.6rem 0.75rem;
-  background: var(--surface-2);
+  gap: 0.35rem;
+  padding: 0.5rem 1rem;
+  background: var(--surface-1);
   border-bottom: 1px solid var(--border);
   min-height: 44px;
   align-items: center;
 }
 .insights-bar:empty { display: none; }
 
-/* Figma: main green status banner — full width, solid green bg */
+/* Figma: main green status banner (e.g. "יום שישי - אין שיעורי בית!") */
 .insight-banner {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   width: 100%;
-  padding: 0.7rem 1rem;
-  background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+  padding: 0.6rem 1rem;
+  background: rgba(16, 185, 129, 0.25);
   border-radius: var(--radius-lg);
-  color: #fff;
+  color: #6ee7b7;
   font-size: 0.95rem;
   font-weight: 700;
-  box-shadow: 0 2px 8px rgba(5, 150, 105, 0.25);
 }
-body.theme-dark .insight-banner {
-  background: rgba(16, 185, 129, 0.25);
-  color: #6ee7b7;
-  box-shadow: none;
+body.theme-light .insight-banner {
+  background: rgba(16, 185, 129, 0.2);
+  color: #059669;
 }
 
 .insight-chip {
@@ -1299,14 +1235,10 @@ body.theme-dark .insight-banner {
   white-space: nowrap;
   letter-spacing: 0.01em;
 }
-.chip-overdue { background: rgba(220, 38,  38,  0.10); color: #dc2626; border: 1px solid rgba(220,38,38,0.25); }
-.chip-soon    { background: rgba(234, 88,  12,  0.10); color: #ea580c; border: 1px solid rgba(234,88,12,0.25); }
-.chip-alerts  { background: rgba(71,  85,  105, 0.10); color: #475569; border: 1px solid rgba(71,85,105,0.25); }
-.chip-ok      { background: rgba(5,  150, 105, 0.10);  color: #059669; border: 1px solid rgba(5,150,105,0.25); }
-body.theme-dark .chip-overdue { background: rgba(239,68,68,0.15);    color: #fca5a5; border-color: rgba(239,68,68,0.35); }
-body.theme-dark .chip-soon    { background: rgba(249,115,22,0.15);   color: #fdba74; border-color: rgba(249,115,22,0.35); }
-body.theme-dark .chip-alerts  { background: rgba(100,116,139,0.18);  color: #94a3b8; border-color: rgba(100,116,139,0.35); }
-body.theme-dark .chip-ok      { background: rgba(16,185,129,0.12);   color: #6ee7b7; border-color: rgba(16,185,129,0.3); }
+.chip-overdue { background: rgba(239, 68,  68,  0.15); color: #fca5a5; border: 1px solid rgba(239,68,68,0.35); }
+.chip-soon    { background: rgba(249, 115, 22,  0.15); color: #fdba74; border: 1px solid rgba(249,115,22,0.35); }
+.chip-alerts  { background: rgba(100, 116, 139, 0.18); color: #94a3b8; border: 1px solid rgba(100,116,139,0.35); }
+.chip-ok      { background: rgba(16,  185, 129, 0.12); color: #6ee7b7; border: 1px solid rgba(16,185,129,0.3); }
 
 /* ─── Suspect-subject badge (subject not in child's curriculum) ─── */
 .badge-suspect {
@@ -1321,18 +1253,16 @@ body.theme-dark .chip-ok      { background: rgba(16,185,129,0.12);   color: #6ee
 
 /* Card type: purple-indigo accent */
 .card.type-message {
-  --card-color: #7C3AED;
-  background: rgba(124, 58, 237, 0.05);
+  --card-color: #818cf8;
+  background: rgba(129, 140, 248, 0.05);
 }
 
 /* Unread message: slightly brighter background + stronger border */
 .msg-unread-card {
-  background: rgba(124, 58, 237, 0.07) !important;
+  background: rgba(129, 140, 248, 0.10) !important;
   border-right-width: 4px;
-  border-right-color: #7C3AED;
+  border-right-color: #818cf8;
 }
-body.theme-dark .card.type-message  { background: rgba(129,140,248,0.05); }
-body.theme-dark .msg-unread-card    { background: rgba(129,140,248,0.10) !important; border-right-color: #818cf8; }
 
 /* Unread badge (new message) */
 .badge-message {
@@ -1373,12 +1303,10 @@ body.theme-dark .msg-unread-card    { background: rgba(129,140,248,0.10) !import
 .approval-checkbox-wrap { display: flex; align-items: center; cursor: pointer; }
 .approval-checkbox { width: 1.25rem; height: 1.25rem; accent-color: #10b981; cursor: pointer; }
 .approval-checkbox:disabled { cursor: default; }
-.approval-equipment { font-size: 0.85rem; color: var(--text-secondary); margin: 0.5rem 0; padding: 0.5rem; background: var(--surface-3); border-radius: 8px; }
+.approval-equipment { font-size: 0.85rem; color: var(--text-secondary); margin: 0.5rem 0; padding: 0.5rem; background: rgba(0,0,0,0.15); border-radius: 8px; }
 .approval-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.6rem; align-items: center; }
-.btn-open-webtop { font-size: 0.8rem; color: #7C3AED; text-decoration: none; padding: 0.35rem 0.7rem; border: 1px solid rgba(124,58,237,0.3); border-radius: 8px; }
-.btn-open-webtop:hover { background: rgba(124,58,237,0.08); }
-body.theme-dark .btn-open-webtop { color: #60a5fa; border-color: rgba(96,165,250,0.3); }
-body.theme-dark .btn-open-webtop:hover { background: rgba(96,165,250,0.1); }
+.btn-open-webtop { font-size: 0.8rem; color: #60a5fa; text-decoration: none; padding: 0.35rem 0.7rem; border: 1px solid rgba(96,165,250,0.3); border-radius: 8px; }
+.btn-open-webtop:hover { background: rgba(96,165,250,0.1); }
 .badge-rejected { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.35); }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1389,9 +1317,9 @@ body.theme-dark .btn-open-webtop:hover { background: rgba(96,165,250,0.1); }
 .btn-hw-history {
   display: block;
   width: 100%;
-  background: rgba(124, 58, 237, 0.06);
-  border: 1px dashed rgba(124, 58, 237, 0.3);
-  color: #7C3AED;
+  background: rgba(59, 130, 246, 0.07);
+  border: 1px dashed rgba(59, 130, 246, 0.30);
+  color: #60a5fa;
   padding: 0.65rem 1rem;
   border-radius: 10px;
   cursor: pointer;
@@ -1403,9 +1331,7 @@ body.theme-dark .btn-open-webtop:hover { background: rgba(96,165,250,0.1); }
   transition: background 0.15s, border-color 0.15s;
   -webkit-tap-highlight-color: transparent;
 }
-.btn-hw-history:hover  { background: rgba(124,58,237,0.10); border-color: rgba(124,58,237,0.45); }
-body.theme-dark .btn-hw-history { background: rgba(59,130,246,0.07); border-color: rgba(59,130,246,0.3); color: #60a5fa; }
-body.theme-dark .btn-hw-history:hover { background: rgba(59,130,246,0.14); border-color: rgba(59,130,246,0.5); }
+.btn-hw-history:hover  { background: rgba(59,130,246,0.14); border-color: rgba(59,130,246,0.50); }
 .btn-hw-history:active { transform: scale(0.98); }
 
 /* Completed card inside history modal */
@@ -1549,7 +1475,7 @@ body.theme-dark .btn-hw-history:hover { background: rgba(59,130,246,0.14); borde
    ═══════════════════════════════════════════════════════════════════ */
 .card-teacher {
   font-size: 0.76rem;
-  color: var(--text-muted);
+  color: #94a3b8;
   margin-top: 0.3rem;
   display: flex;
   align-items: center;
@@ -1583,17 +1509,15 @@ body.theme-dark .btn-hw-history:hover { background: rgba(59,130,246,0.14); borde
    TREND CHIPS (insights bar)
    ═══════════════════════════════════════════════════════════════════ */
 .chip-trend-up {
-  background: rgba(220, 38, 38, 0.10);
-  color: #dc2626;
-  border: 1px solid rgba(220, 38, 38, 0.25);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.30);
 }
 .chip-trend-down {
-  background: rgba(5, 150, 105, 0.10);
-  color: #059669;
-  border: 1px solid rgba(5, 150, 105, 0.25);
+  background: rgba(16, 185, 129, 0.12);
+  color: #6ee7b7;
+  border: 1px solid rgba(16, 185, 129, 0.30);
 }
-body.theme-dark .chip-trend-up   { background: rgba(239,68,68,0.12);    color: #fca5a5; border-color: rgba(239,68,68,0.3); }
-body.theme-dark .chip-trend-down { background: rgba(16,185,129,0.12);   color: #6ee7b7; border-color: rgba(16,185,129,0.3); }
 
 /* ═══════════════════════════════════════════════════════════════════
    CLICKABLE INSIGHT CHIPS
