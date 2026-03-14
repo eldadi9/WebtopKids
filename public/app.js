@@ -540,26 +540,50 @@ function isValidNotification(n) {
 
 /* ─── Stats bar — Figma: 4 large cards (הודעות, ציונים, התראות, שיעורי בית) ── */
 function renderStats(notifications, classEvents) {
-  const messages = (lastData?.data?.messages || []).filter(m => !m.read).length;
+  // Messages: count those not read (check both scraper field and local status)
+  const messages = (lastData?.data?.messages || []).filter(m => !(m.read || lastStatus[msgId(m)]?.read)).length;
   const grades   = notifications.filter(n => n.type === 'grade').length;
+  // Alerts: use same filter as renderAlerts (isValidNotification drops stale ones)
   const alerts   = notifications.filter(n =>
-    ['late', 'missing_equipment', 'absence', 'homework_not_done'].includes(n.type)).length;
+    ['late', 'missing_equipment', 'absence', 'homework_not_done'].includes(n.type) && isValidNotification(n)).length;
   const homework = notifications.filter(n => n.type === 'homework' && n.date && isSubjectValid(n.student, n.subject))
     .filter(n => !lastStatus[homeworkId(n)]?.done).length;
+  // Unread = messages not read + alerts not seen (use local status to track)
+  const unread   = messages + notifications.filter(n =>
+    isValidNotification(n) && !lastStatus['seen_' + notifId(n)]?.seen).length;
 
   const cards = [
-    { icon: '📨', num: messages, label: 'הודעות',  cls: 'stat-messages',  section: 'messages' },
-    { icon: '🎓', num: grades,   label: 'ציונים',  cls: 'stat-grades',    section: 'grades' },
-    { icon: '⚠️', num: alerts,   label: 'התראות',  cls: 'stat-alerts',    section: 'alerts' },
     { icon: '📚', num: homework, label: 'שיעורי בית', cls: 'stat-homework', section: 'homework' },
+    { icon: '⚠️', num: alerts,   label: 'התראות',  cls: 'stat-alerts',    section: 'alerts' },
+    { icon: '🎓', num: grades,   label: 'ציונים',  cls: 'stat-grades',    section: 'grades' },
+    { icon: '📨', num: messages, label: 'הודעות',  cls: 'stat-messages',  section: 'messages' },
+    { icon: '🔔', num: unread,   label: 'לא נקרא', cls: 'stat-unread',    section: 'feed', action: 'markAllSeen' },
   ];
   document.getElementById('stats-bar').innerHTML = cards.map(c =>
-    `<div class="stat-card ${c.cls}" onclick="navigateTo('${c.section}')" role="button" tabindex="0">
+    `<div class="stat-card ${c.cls}" onclick="${c.action ? c.action + '()' : `navigateTo('${c.section}')`}" role="button" tabindex="0">
        <span class="stat-card-icon">${c.icon}</span>
        <span class="stat-card-num">${c.num}</span>
        <span class="stat-card-label">${c.label}</span>
      </div>`
   ).join('');
+}
+
+/* ─── Mark all notifications as seen (clears "לא נקרא" counter) ────────── */
+function markAllSeen() {
+  const notifications = lastData?.data?.notifications || [];
+  for (const n of notifications) {
+    if (isValidNotification(n)) lastStatus['seen_' + notifId(n)] = { seen: true };
+  }
+  // Also mark all messages read
+  for (const m of lastData?.data?.messages || []) {
+    const id = msgId(m);
+    if (!lastStatus[id]?.read) markMessageRead(id);
+  }
+  navigateTo('feed');
+  // Re-render stats to show 0
+  const notifications2 = (lastData?.data?.notifications || []);
+  const visible = currentStudent ? notifications2.filter(n => studentMatch(n.student, currentStudent)) : notifications2;
+  renderStats(visible, []);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1909,6 +1933,9 @@ function esc(str) {
 }
 function homeworkId(n) {
   return `${(n.student || '').trim()}_${(n.subject || '').trim()}_${(n.date || '').trim()}_${(n.lesson || '').toString().trim()}`;
+}
+function notifId(n) {
+  return `notif_${(n.student||'').trim()}_${(n.type||'').trim()}_${(n.subject||'').trim()}_${(n.date||'').trim()}_${(n.lesson||'').toString().trim()}`;
 }
 function msgId(m) {
   const s = `${m.from || ''}|${m.date || ''}|${(m.subject || '').slice(0, 50)}`;

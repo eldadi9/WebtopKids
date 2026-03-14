@@ -200,17 +200,17 @@ body.theme-light .logo-banner-name { color: #8B5CF6; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ─── Sticky top bar — Figma: purple gradient header ─── */
+/* ─── Sticky top bar — Figma: purple→pink→orange tri-color gradient ─── */
 .top-bar {
   position: sticky;
   top: 0;
   z-index: 50;
-  background: linear-gradient(135deg, #7C3AED 0%, #9333ea 40%, #a855f7 70%, #c084fc 100%);
-  box-shadow: 0 4px 20px rgba(124, 58, 237, 0.35);
+  background: linear-gradient(to left, #8B5CF6 0%, #EC4899 50%, #F97316 100%);
+  box-shadow: 0 4px 20px rgba(139, 92, 246, 0.35);
   transition: background 0.3s ease, box-shadow 0.3s ease;
 }
 body.theme-dark .top-bar {
-  background: linear-gradient(to right, #6D28D9 0%, #7C3AED 30%, #A78BFA 60%, #C4B5FD 85%, #E9D5FF 100%);
+  background: linear-gradient(to left, #7C3AED 0%, #db2777 50%, #ea580c 100%);
   box-shadow: 0 4px 24px rgba(109, 40, 217, 0.4);
 }
 
@@ -300,20 +300,21 @@ body.theme-dark .top-bar {
 
 /* ─── Refresh button (primary action) ────────────────────────────────────── */
 .btn-refresh {
-  background: rgba(255,255,255,0.3);
+  background: rgba(255,255,255,0.25);
   backdrop-filter: blur(8px);
-  border: 1px solid rgba(255,255,255,0.5);
+  border: 2px solid rgba(255,255,255,0.6);
   color: #fff;
-  padding: 0;
-  width: 48px; min-height: 48px;
+  padding: 0 0.6rem;
+  height: 52px; min-width: 52px;
   border-radius: 14px;
   cursor: pointer;
   font-family: inherit;
-  font-size: 1.2rem;
-  display: flex; align-items: center; justify-content: center;
+  font-size: 1.3rem;
+  display: flex; align-items: center; justify-content: center; gap: 0.3rem;
   transition: all var(--transition-fast);
   -webkit-tap-highlight-color: transparent;
   flex-shrink: 0;
+  font-weight: 700;
 }
 .btn-refresh:hover  { background: rgba(255,255,255,0.35); }
 .btn-refresh:active { transform: scale(0.94); }
@@ -367,16 +368,19 @@ body.theme-dark .student-pill { background: var(--surface-3); border-color: var(
 body.theme-dark .student-pill:hover { background: #2d3e55; color: var(--text-primary); }
 body.theme-dark .student-pill.active { background: #3b82f6; border-color: #3b82f6; color: #fff; }
 
-/* ─── Stats bar ── Figma: 4 large solid-color tile cards ─────────────────── */
+/* ─── Stats bar ── Figma: horizontal scrollable tiles (5 items) ──────────── */
 .stats-bar {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 0.5rem;
-  padding: 0.75rem 0.75rem;
+  display: flex;
+  flex-direction: row;
+  gap: 0.4rem;
+  padding: 0.6rem 0.75rem;
   background: var(--surface-2);
   border-bottom: 1px solid var(--border);
+  overflow-x: hidden;
+  overflow-y: hidden;
   min-height: 0;
 }
+.stats-bar::-webkit-scrollbar { display: none; }
 .stats-bar:empty { padding: 0; border: none; }
 
 .stat-chip {
@@ -391,91 +395,108 @@ body.theme-dark .student-pill.active { background: #3b82f6; border-color: #3b82f
   box-shadow: var(--shadow-card);
 }
 
-/* Figma stat cards — solid vibrant background, white text, icon top */
+/* Figma stat cards — solid gradient bg, white text, SVG icon top */
 .stat-card {
+  flex: 1 1 0;
+  min-width: 64px;
+  max-width: 100px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.3rem;
-  padding: 0.7rem 0.4rem;
-  border-radius: var(--radius-lg);
-  min-height: 76px;
+  gap: 0.25rem;
+  padding: 0.65rem 0.4rem;
+  border-radius: 1rem;
+  min-height: 74px;
   cursor: pointer;
   color: #fff;
   transition: transform var(--transition-fast), box-shadow var(--transition-fast);
   -webkit-tap-highlight-color: transparent;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.12);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.15);
 }
-.stat-card:hover  { transform: scale(1.04); box-shadow: 0 6px 18px rgba(0,0,0,0.18); }
+.stat-card:hover  { transform: scale(1.04); box-shadow: 0 8px 20px rgba(0,0,0,0.2); }
 .stat-card:active { transform: scale(0.97); }
-.stat-card-icon  { font-size: 1.35rem; line-height: 1; }
-.stat-card-num   { font-size: 1.6rem; font-weight: 800; line-height: 1; }
-.stat-card-label { font-size: 0.72rem; font-weight: 700; opacity: 0.92; letter-spacing: 0.01em; }
+.stat-card-icon  { font-size: 1.3rem; line-height: 1; }
+.stat-card-num   { font-size: 1.75rem; font-weight: 900; line-height: 1; }
+.stat-card-label { font-size: 0.7rem; font-weight: 700; opacity: 0.92; text-align: center; line-height: 1.2; }
 
-/* Figma colors: homework=purple, alerts=orange-red, grades=cyan-blue, messages=pink */
-.stat-card.stat-homework  { background: linear-gradient(135deg, #7C3AED 0%, #8B5CF6 100%); }
-.stat-card.stat-alerts    { background: linear-gradient(135deg, #ea580c 0%, #f97316 100%); }
-.stat-card.stat-grades    { background: linear-gradient(135deg, #0284c7 0%, #38bdf8 100%); }
-.stat-card.stat-messages  { background: linear-gradient(135deg, #9333ea 0%, #c084fc 100%); }
-.stat-card.stat-unread    { background: linear-gradient(135deg, #db2777 0%, #f472b6 100%); }
+/* Figma gradient colors per type */
+.stat-card.stat-homework  { background: linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%); }
+.stat-card.stat-alerts    { background: linear-gradient(135deg, #F97316 0%, #EF4444 100%); }
+.stat-card.stat-grades    { background: linear-gradient(135deg, #3B82F6 0%, #06B6D4 100%); }
+.stat-card.stat-messages  { background: linear-gradient(135deg, #EC4899 0%, #F43F5E 100%); }
+.stat-card.stat-unread    { background: linear-gradient(135deg, #FBBF24 0%, #F59E0B 100%); }
 
-/* Dark theme stat cards — slightly muted */
-body.theme-dark .stat-card.stat-homework { background: rgba(139, 92, 246, 0.25); color: #c4b5fd; box-shadow: none; }
-body.theme-dark .stat-card.stat-alerts   { background: rgba(249, 115, 22, 0.25); color: #fdba74; box-shadow: none; }
-body.theme-dark .stat-card.stat-grades   { background: rgba(59, 130, 246, 0.25);  color: #93c5fd; box-shadow: none; }
-body.theme-dark .stat-card.stat-messages { background: rgba(147, 51, 234, 0.25);  color: #d8b4fe; box-shadow: none; }
-body.theme-dark .stat-card.stat-unread   { background: rgba(219, 39, 119, 0.25);  color: #f9a8d4; box-shadow: none; }
-
-/* ─── Section tabs — Figma: icon above label, active bottom-underline ────── */
+/* ─── Section tabs — Figma: white/80 blur bg, border-purple-200, gradient active underline ── */
 .section-tabs {
   display: flex;
   flex-wrap: nowrap;
   justify-content: flex-start;
   gap: 0;
-  padding: 0 0.5rem;
-  background: #fff;
-  border-bottom: 2px solid var(--border);
+  padding: 0.5rem 0.5rem 0;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 2px solid #e9d5ff;
+  box-shadow: 0 1px 0 rgba(139, 92, 246, 0.08);
   -webkit-overflow-scrolling: touch;
   overflow-x: auto;
   overflow-y: hidden;
-  scroll-snap-type: x mandatory;
   scrollbar-width: none;
-  mask-image: linear-gradient(to left, transparent 0%, black 24px, black calc(100% - 24px), transparent 100%);
-  -webkit-mask-image: linear-gradient(to left, transparent 0%, black 24px, black calc(100% - 24px), transparent 100%);
 }
 .section-tabs::-webkit-scrollbar { display: none; }
-body.theme-dark .section-tabs { background: var(--surface-2); border-bottom-color: var(--border); }
+body.theme-dark .section-tabs {
+  background: rgba(30, 20, 50, 0.85);
+  border-bottom-color: rgba(139, 92, 246, 0.3);
+}
 .stab {
   flex: 0 0 auto;
-  min-width: 60px;
+  min-width: 56px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.18rem;
+  gap: 0.2rem;
   background: transparent;
   border: none;
   border-bottom: 3px solid transparent;
   margin-bottom: -2px;
-  color: var(--text-muted);
-  padding: 0.55rem 0.55rem 0.45rem;
+  color: #6B7280;
+  padding: 0.4rem 0.75rem 0.5rem;
   font-family: inherit;
   font-size: 0.68rem;
   font-weight: 600;
   cursor: pointer;
-  transition: color var(--transition-fast), border-color var(--transition-fast);
+  transition: color var(--transition-fast);
   -webkit-tap-highlight-color: transparent;
   min-height: var(--tap-min);
   text-align: center;
-  scroll-snap-align: start;
+  white-space: nowrap;
+  position: relative;
 }
 .stab .stab-icon { font-size: 1.15rem; line-height: 1; }
 .stab:focus-visible { outline: 3px solid #8b5cf6; outline-offset: 2px; }
-.stab:hover { color: #8b5cf6; }
-.stab.active { color: #7C3AED; border-bottom-color: #7C3AED; font-weight: 700; }
-body.theme-dark .stab { color: var(--text-muted); }
-body.theme-dark .stab:hover { color: var(--text-primary); background: rgba(139, 92, 246, 0.12); }
-body.theme-dark .stab.active { color: #c4b5fd; background: rgba(139, 92, 246, 0.15); border-bottom-color: #8b5cf6; }
+.stab:hover { color: #8B5CF6; }
+/* Active: purple text + gradient bottom border (purple→pink) */
+.stab.active {
+  color: #7C3AED;
+  font-weight: 700;
+  border-bottom-color: transparent;
+  background: transparent;
+}
+.stab.active::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(to left, #8B5CF6, #EC4899);
+  border-radius: 999px;
+}
+body.theme-dark .stab { color: #9CA3AF; }
+body.theme-dark .stab:hover { color: #c4b5fd; }
+body.theme-dark .stab.active { color: #a78bfa; }
+body.theme-dark .stab.active::after { background: linear-gradient(to left, #a78bfa, #f472b6); }
 
 /* ─── Filter tabs (inside feed section) ────────────────────────────────── */
 .filter-tabs {
@@ -584,40 +605,95 @@ body.theme-dark .error-banner { background: rgba(239,68,68,0.08); color: #fca5a5
 
 .card-list { display: flex; flex-direction: column; gap: var(--space-lg); }
 
-/* ─── Cards ── Figma: white bg, colored right border + accent bg tint ──── */
+/* ─── Cards ── Figma: rounded-2xl, border-2, colored bg tint, top accent bar ── */
 .card {
   background: #ffffff;
-  border-radius: var(--radius-xl);
-  padding: var(--space-xl) var(--space-2xl);
-  border: 1px solid rgba(0,0,0,0.07);
-  border-right: 4px solid var(--card-color, #64748b);
-  box-shadow: 0 1px 8px rgba(0,0,0,0.06);
+  border-radius: 1rem;
+  padding: var(--space-xl) var(--space-xl);
+  border: 2px solid var(--card-border-color, rgba(0,0,0,0.1));
+  box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+  position: relative;
+  overflow: hidden;
   transition: opacity var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
 }
-.card:hover { transform: translateX(-3px); box-shadow: 0 4px 18px rgba(0,0,0,0.10); }
+/* Top gradient accent bar — Figma: absolute top-0 h-1 bg-gradient-to-r */
+.card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 4px;
+  background: var(--card-accent-gradient, linear-gradient(to left, #8B5CF6, #EC4899));
+}
+.card:hover { transform: scale(1.01); box-shadow: 0 6px 24px rgba(0,0,0,0.12); }
 @media (hover: none) {
   .card:active { transform: scale(0.98); box-shadow: var(--shadow-card-pressed); }
 }
 
-/* Dark mode cards restore old behavior */
+/* Dark mode cards */
 body.theme-dark .card {
   background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-right: 5px solid var(--card-color, #64748b);
+  border-color: var(--card-border-color, rgba(255,255,255,0.1));
   box-shadow: var(--shadow-card);
 }
-body.theme-dark .card:hover { transform: translateX(-3px); box-shadow: var(--shadow-card-hover); }
+body.theme-dark .card:hover { transform: scale(1.01); box-shadow: var(--shadow-card-hover); }
 
-.card.type-homework          { --card-color: var(--c-homework);    background: rgba(139, 92, 246, 0.05); }
-.card.type-homework_not_done { --card-color: var(--c-hw-not-done); background: rgba(217, 119, 6, 0.05); }
-.card.type-missing_equipment { --card-color: var(--c-missing);     background: rgba(234, 88, 12, 0.05); }
-.card.type-late              { --card-color: var(--c-late);        background: rgba(180, 83, 9, 0.05); }
-.card.type-absence           { --card-color: var(--c-absence);     background: rgba(220, 38, 38, 0.05); }
-.card.type-grade             { --card-color: var(--c-grade);       background: rgba(5, 150, 105, 0.05); }
-.card.type-good_word         { --card-color: var(--c-good-word);   background: rgba(219, 39, 119, 0.05); }
-.card.type-general           { --card-color: var(--c-general);     background: rgba(71, 85, 105, 0.04); }
+/* Per-type: border color, bg tint, top accent gradient — matches NotificationCard.tsx */
+.card.type-homework {
+  --card-border-color: #d8b4fe;
+  --card-accent-gradient: linear-gradient(to left, #8B5CF6, #7C3AED);
+  --card-icon-bg: #8B5CF6;
+  background: rgba(139, 92, 246, 0.05);
+}
+.card.type-homework_not_done {
+  --card-border-color: #fed7aa;
+  --card-accent-gradient: linear-gradient(to left, #F97316, #EA580C);
+  --card-icon-bg: #F97316;
+  background: rgba(249, 115, 22, 0.05);
+}
+.card.type-missing_equipment {
+  --card-border-color: #fed7aa;
+  --card-accent-gradient: linear-gradient(to left, #F97316, #EA580C);
+  --card-icon-bg: #F97316;
+  background: rgba(234, 88, 12, 0.05);
+}
+.card.type-late {
+  --card-border-color: #fde68a;
+  --card-accent-gradient: linear-gradient(to left, #F59E0B, #D97706);
+  --card-icon-bg: #F59E0B;
+  background: rgba(245, 158, 11, 0.05);
+}
+.card.type-absence {
+  --card-border-color: #fca5a5;
+  --card-accent-gradient: linear-gradient(to left, #EF4444, #DC2626);
+  --card-icon-bg: #EF4444;
+  background: rgba(220, 38, 38, 0.05);
+}
+.card.type-grade {
+  --card-border-color: #93c5fd;
+  --card-accent-gradient: linear-gradient(to left, #3B82F6, #06B6D4);
+  --card-icon-bg: linear-gradient(135deg, #3B82F6, #06B6D4);
+  background: rgba(59, 130, 246, 0.05);
+}
+.card.type-good_word {
+  --card-border-color: #f9a8d4;
+  --card-accent-gradient: linear-gradient(to left, #EC4899, #F43F5E);
+  --card-icon-bg: linear-gradient(135deg, #EC4899, #F43F5E);
+  background: rgba(236, 72, 153, 0.05);
+}
+.card.type-general {
+  --card-border-color: #a5b4fc;
+  --card-accent-gradient: linear-gradient(to left, #6366F1, #4F46E5);
+  --card-icon-bg: #6366F1;
+  background: rgba(99, 102, 241, 0.04);
+}
+.card.type-message {
+  --card-border-color: #99f6e4;
+  --card-accent-gradient: linear-gradient(to left, #14B8A6, #0D9488);
+  --card-icon-bg: #14B8A6;
+  background: rgba(20, 184, 166, 0.05);
+}
 
-/* Dark mode card type colors */
+/* Dark mode card type tints */
 body.theme-dark .card.type-homework          { background: var(--c-homework-bg); }
 body.theme-dark .card.type-homework_not_done { background: var(--c-hw-not-done-bg); }
 body.theme-dark .card.type-missing_equipment { background: var(--c-missing-bg); }
@@ -637,15 +713,18 @@ body.theme-dark .card.type-general           { background: var(--c-general-bg); 
 .card-icon-box {
   width: 48px; height: 48px;
   flex-shrink: 0;
-  border-radius: 12px;
+  border-radius: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 1.4rem;
   line-height: 1;
-  background: var(--card-color, #64748b);
+  background: var(--card-icon-bg, var(--card-accent-gradient, #64748b));
   color: #fff;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  transition: transform var(--transition-fast);
 }
+.card:hover .card-icon-box { transform: scale(1.1); }
 .card-content { flex: 1; min-width: 0; }
 
 /* Link cards (קישורים) ── */
@@ -822,16 +901,18 @@ a.link-card:hover { opacity: 0.9; }
 
   /* Shrink stats bar */
   .stats-bar {
-    padding: 0.25rem 0.75rem;
-    gap: 0.25rem;
+    padding: 0.3rem 0.5rem;
+    gap: 0.3rem;
   }
   .stat-card {
-    min-height: 56px;
-    padding: 0.4rem 0.35rem;
+    min-height: 60px;
+    min-width: 52px;
+    padding: 0.45rem 0.25rem;
+    border-radius: 0.75rem;
   }
   .stat-card-icon { font-size: 1rem; }
-  .stat-card-num { font-size: 1.1rem; }
-  .stat-card-label { font-size: 0.6rem; }
+  .stat-card-num { font-size: 1.2rem; }
+  .stat-card-label { font-size: 0.58rem; }
 
   /* Compact section tabs */
   .stab {
@@ -1421,21 +1502,21 @@ body.theme-dark .btn-hw-history:hover { background: rgba(59,130,246,0.14); borde
 .child-select {
   appearance: none;
   -webkit-appearance: none;
-  background: var(--surface-3) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%2394a3b8' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat 0.55rem center;
-  border: 1px solid var(--border-bright);
-  color: #e2e8f0;
+  background: rgba(255,255,255,0.22) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23ffffff' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat 0.55rem center;
+  border: 1px solid rgba(255,255,255,0.45);
+  color: #ffffff;
   font-family: inherit;
-  font-size: 0.82rem;
-  font-weight: 600;
+  font-size: 0.85rem;
+  font-weight: 700;
   padding: 0.35rem 0.85rem 0.35rem 1.75rem;
   border-radius: 8px;
   cursor: pointer;
   direction: rtl;
-  max-width: 130px;
+  max-width: 140px;
   transition: border-color 0.15s, background 0.15s;
   -webkit-tap-highlight-color: transparent;
 }
-.child-select:focus { outline: none; border-color: #60a5fa; }
+.child-select:focus { outline: none; border-color: rgba(255,255,255,0.8); }
 .child-select option { background: #1e293b; color: #e2e8f0; }
 
 /* ═══════════════════════════════════════════════════════════════════

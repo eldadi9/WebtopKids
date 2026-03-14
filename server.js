@@ -3,6 +3,8 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { spawn } from 'child_process';
+import { config as dotenvConfig } from 'dotenv';
+dotenvConfig();
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

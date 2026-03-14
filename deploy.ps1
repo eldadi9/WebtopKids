@@ -3,7 +3,7 @@
 
 param(
   [string]$Server = "root@76.13.8.113",
-  [string]$RemotePath = "/srv/webtop",
+  [string]$RemotePath = "/root/webtop",
   [switch]$NoPrompt
 )
 
