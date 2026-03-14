@@ -301,56 +301,56 @@ async function switchToStudent(page, name) {
   return false;
 }
 
-// ── Manual login (browser visible — for reCAPTCHA) ────────────────────────────
-// Used when session expired and we need the user to solve CAPTCHA.
+// ── Manual login (browser visible — auto-fills credentials) ──────────────────
 async function doManualLogin(page) {
-  process.stderr.write(
-    "\n>>> Session expired. Browser opened for manual login.\n" +
-    "    Fill username, password, solve CAPTCHA if shown, click כניסה.\n" +
-    "    Waiting up to 10 minutes...\n\n"
-  );
-  await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
-  await page.waitForURL(/dashboard/, { timeout: 600_000 }); // 10 minutes
+  process.stderr.write("\n>>> Auto-filling credentials in headed browser...\n\n");
+  await fillAndSubmitLogin(page);
 }
 
-// ── Login ─────────────────────────────────────────────────────────────────────
-async function doLogin(page, isHeaded = false) {
-  if (CAPTURE_MODE || isHeaded) {
-    // Manual login required — reCAPTCHA blocks auto-fill in headless
-    return doManualLogin(page);
-  }
-
-  // ── HEADLESS + credentials: try auto-fill (may fail if reCAPTCHA) ───────────
+// ── Auto-fill credentials (works in both headless and headed) ─────────────────
+async function fillAndSubmitLogin(page) {
   if (!USER || !PASS) throw new Error("WEBTOP_USER / WEBTOP_PASS not set");
 
-  await page.goto(LOGIN_URL, { waitUntil: "networkidle", timeout: TIMEOUT });
-  await sleep(1000);
+  await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+  await sleep(2000);
 
-  // Fill username — Angular Material input (no placeholder attr, use type selector)
-  const userInput = page.locator('input[type="text"].mat-input-element').first();
+  // Fill username — type slowly like a human to pass reCAPTCHA v3
+  const userInput = page.locator('input[type="text"].mat-input-element, input[type="text"][formcontrolname], input[name="username"], input[id*="user"]').first();
   await userInput.waitFor({ timeout: TIMEOUT });
-  await userInput.fill(USER);
+  await userInput.click();
+  await sleep(300);
+  await userInput.type(USER, { delay: 80 });
 
-  // Fill password — Angular Material password input
+  await sleep(500);
+
+  // Fill password
   const passInput = page.locator('input[type="password"]').first();
-  await passInput.fill(PASS);
+  await passInput.click();
+  await sleep(300);
+  await passInput.type(PASS, { delay: 80 });
 
-  // Wait for the submit button to become enabled (reCAPTCHA must pass first)
-  // Try up to 45 seconds for the button to enable
+  await sleep(800);
+
+  // Wait for submit button to become enabled (reCAPTCHA v3 auto-passes in headed browser)
   const submitBtn = page.locator('button[type="submit"]').first();
   await page.waitForFunction(
     () => {
       const btn = document.querySelector('button[type="submit"]');
       return btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true';
     },
-    { timeout: 45000 }
+    { timeout: 60000 }
   ).catch(() => {
-    // Button still disabled — try clicking anyway (some reCAPTCHA v3 may auto-pass)
-    process.stderr.write('Warning: submit button still disabled after 45s, attempting click anyway\n');
+    process.stderr.write('[warn] Submit button still disabled after 60s, attempting click anyway\n');
   });
 
-  submitBtn.click();
-  await page.waitForURL(/dashboard/, { timeout: 60000 });
+  await sleep(500);
+  await submitBtn.click();
+  await page.waitForURL(/dashboard/, { timeout: 90000 });
+}
+
+// ── Login ─────────────────────────────────────────────────────────────────────
+async function doLogin(page, isHeaded = false) {
+  await fillAndSubmitLogin(page);
 }
 
 // ── Dashboard extraction ──────────────────────────────────────────────────────
@@ -1099,9 +1099,9 @@ const LAUNCH_OPTS = {
       process.exit(1);
     }
     if (HEADLESS) {
-      // reCAPTCHA blocks headless login. Relaunch headed for manual login only.
+      // reCAPTCHA v3 passes in headed browser — relaunch headed and auto-fill credentials
       await context.close();
-      process.stderr.write("\n>>> Session expired. Opening browser for manual login (reCAPTCHA required)...\n>>> Log in, solve CAPTCHA if shown, click כניסה. Waiting up to 10 min.\n\n");
+      process.stderr.write("\n>>> Session expired. Relaunching headed browser to auto-login...\n\n");
       context = await chromium.launchPersistentContext(PROFILE_DIR, {
         headless: false,
         ...LAUNCH_OPTS,
@@ -1109,8 +1109,7 @@ const LAUNCH_OPTS = {
       page = await context.newPage();
       page.setDefaultTimeout(TIMEOUT);
       await page.setViewportSize({ width: 1400, height: 900 });
-      await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
-      await page.waitForURL(/dashboard/, { timeout: 600_000 });
+      await fillAndSubmitLogin(page);
       await dismissCookies();
     } else {
       await doLogin(page);

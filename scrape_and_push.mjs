@@ -31,7 +31,7 @@ const PUSH_SECRET = process.env.PUSH_SECRET || 'webtop2026';
 async function runScraper() {
   return new Promise((resolve, reject) => {
     const proc = spawn(process.execPath, [join(__dirname, 'webtop_scrape.mjs')], {
-      env: { ...process.env, cwd: __dirname },
+      env: { ...process.env, WEBTOP_SESSION: join(__dirname, '.webtop_session.json') },
       cwd: __dirname,
     });
     let stdout = '', stderr = '';

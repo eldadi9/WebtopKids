@@ -176,7 +176,9 @@ async function scrapeAndPush(reason = 'scheduled', attempt = 1) {
     const links = data?.data?.usefulLinks || [];
     const isLoginPage = links.some(l => (l.href || '').includes('forgotPassword'));
     if (isLoginPage) {
+      const msg = '⚠️ Webtop session expired — open the app and run:\n  WEBTOP_CAPTURE=true node webtop_scrape.mjs';
       log(`ERROR — Scrape returned login page. Run WEBTOP_CAPTURE=true node webtop_scrape.mjs to re-login.`);
+      await sendTelegram(msg);
       scrapeRunning = false;
       return; // no retry — needs manual intervention
     }
@@ -203,6 +205,12 @@ async function scrapeAndPush(reason = 'scheduled', attempt = 1) {
     scrapeRunning = false;
   } catch (e) {
     log(`ERROR — ${e.message}`);
+    if (e.message.includes('Session expired')) {
+      await sendTelegram('⚠️ Webtop session expired — open the app and run:\n  WEBTOP_CAPTURE=true node webtop_scrape.mjs');
+      log('Telegram alert sent — session expired, manual login required');
+      scrapeRunning = false;
+      return; // no retry — needs manual intervention
+    }
     if (attempt < MAX_RETRIES) {
       log(`Retrying in ${RETRY_DELAY}s… (attempt ${attempt + 1}/${MAX_RETRIES})`);
       await new Promise(r => setTimeout(r, RETRY_DELAY * 1000));
@@ -230,6 +238,24 @@ async function pollForTrigger() {
   } catch {
     // Network blip — silent (will retry on next poll interval)
   }
+}
+
+// ─── Telegram alert ──────────────────────────────────────────────────────────
+const TG_TOKEN   = process.env.TELEGRAM_BOT_TOKEN;
+const TG_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+async function sendTelegram(msg) {
+  if (!TG_TOKEN || !TG_CHAT_ID) return;
+  try {
+    await fetch(
+      `https://api.telegram.org/bot${TG_TOKEN}/sendMessage`,
+      {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ chat_id: TG_CHAT_ID, text: msg }),
+        signal:  AbortSignal.timeout(8_000),
+      }
+    );
+  } catch { /* silent — don't crash the loop over an alert */ }
 }
 
 // ─── Logger with timestamp ────────────────────────────────────────────────────
