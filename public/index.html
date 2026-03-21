@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=11" />
+  <link rel="stylesheet" href="style.css?v=27" />
 </head>
 <body>
 
@@ -40,12 +40,19 @@
     <!-- Header — Logo+name CENTER (large), Student RIGHT (large), Icons LEFT -->
     <header class="header header-figma">
       <div class="header-icons">
-        <button id="btn-theme" class="btn-theme" title="החלף מצב (כהה/בהיר)" aria-label="החלף ערכת נושא">
-          <span class="theme-icon">🌙</span>
-        </button>
-        <button id="btn-refresh" class="btn-refresh" onclick="refresh()" title="רענן נתונים">
-          <span class="refresh-icon">🔄</span>
-        </button>
+        <div class="header-icons-btns">
+          <button id="btn-theme" class="btn-theme" title="החלף מצב (כהה/בהיר)" aria-label="החלף ערכת נושא">
+            <span class="theme-icon">🌙</span>
+          </button>
+          <button id="btn-refresh" class="btn-refresh" onclick="refresh()" title="רענן נתונים">
+            <span class="refresh-icon">🔄</span>
+            <span class="refresh-label">רענן</span>
+          </button>
+        </div>
+        <div class="update-block-mobile">
+          <span id="data-time-mobile"  class="last-update" title="נתונים מהאתר"></span>
+          <span id="sync-time-mobile"  class="last-update sync-status" title="בדיקה אחרונה"></span>
+        </div>
       </div>
       <div class="header-center header-logo">
         <img src="logo.png" class="app-logo" alt="WebtopKids" />
@@ -188,7 +195,7 @@
     </div>
   </div>
 
-  <script src="app.js?v=11"></script>
+  <script src="app.js?v=16"></script>
   <script>
     window.onerror = function(msg, url, line, col, err) {
       console.error('App error:', msg, 'at', line + ':' + col, err);

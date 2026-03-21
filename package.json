@@ -13,7 +13,11 @@
     "install-browsers-deps": "npx playwright install-deps chromium"
   },
   "dependencies": {
+    "capsolver-npm": "^2.1.10",
     "express": "^4.21.0",
-    "playwright": "^1.44.0"
+    "patchright": "^1.58.2",
+    "playwright": "^1.44.0",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
   }
 }

@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ssh root@76.13.8.113 \"pm2 restart webtop && sleep 2 && curl -s http://76.13.8.113:3001/ | grep ''app.js''\")",
+      "Bash(ssh root@76.13.8.113 \"pm2 show webtop | grep -E ''script|cwd|root''\")",
+      "Bash(ssh root@76.13.8.113 \"grep ''app.js'' /root/webtop/public/index.html && ls -la /root/webtop/public/ | head -10\")",
+      "Bash(ssh root@76.13.8.113 \"cp /srv/webtop/public/index.html /root/webtop/public/index.html && cp /srv/webtop/public/app.js /root/webtop/public/app.js && cp /srv/webtop/public/style.css /root/webtop/public/style.css && echo ''Copied'' && grep ''app.js'' /root/webtop/public/index.html\")",
+      "Bash(node webtop_scrape.mjs)",
+      "Bash(node -e \":*)",
+      "Bash(ssh root@76.13.8.113 \"grep -n ''telegram\\\\|TELEGRAM\\\\|sendTelegram\\\\|bot_token\\\\|chat_id'' /root/webtop/server.js | head -30\")",
+      "Bash(ssh root@76.13.8.113 \"sed -n ''230,320p'' /root/webtop/server.js\")",
+      "Bash(ssh root@76.13.8.113 \"grep -E ''TELEGRAM|BOT'' /root/webtop/.env 2>/dev/null || echo ''no .env or no telegram''\")",
+      "Bash(node -e \"const fs=require\\(''''fs''''\\); const raw=fs.readFileSync\\(''''data_cache.json'''',''''utf8''''\\); const data=JSON.parse\\(raw\\); console.log\\(''''studentName:'''', JSON.stringify\\(data.data?.studentName\\)\\); console.log\\(''''keys:'''', Object.keys\\(data.data||{}\\).slice\\(0,10\\)\\);\")"
+    ]
+  }
+}

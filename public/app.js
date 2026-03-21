@@ -135,6 +135,8 @@ function updateSyncTime() {
   if (!el || !lastSyncTime) return;
   const t = lastSyncTime.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
   el.textContent = `🔄 ${t}`;
+  const m = document.getElementById('sync-time-mobile');
+  if (m) m.textContent = el.textContent;
 }
 
 /* ─── Main render ──────────────────────────────────────────────────────── */
@@ -159,11 +161,10 @@ function render(data, status) {
   // Data timestamp (when scraper last ran on local machine)
   const ts = data.extractedAt ? new Date(data.extractedAt) : null;
   const dtEl = document.getElementById('data-time');
-  if (dtEl) {
-    dtEl.textContent = ts
-      ? `📡 ${ts.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}`
-      : '';
-  }
+  const dtText = ts ? `📡 ${ts.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}` : '';
+  if (dtEl) dtEl.textContent = dtText;
+  const dtM = document.getElementById('data-time-mobile');
+  if (dtM) dtM.textContent = dtText;
 
   const notifications = d.notifications || [];
   const classEvents   = resolveClassEventsForStudent(d.classEventsByStudent, currentStudent, d.classEvents);
@@ -227,7 +228,7 @@ function rerender() {
 function updateTabCounts(notifications, classEvents) {
   const hw      = notifications.filter(n => n.type === 'homework' && n.date && isSubjectValid(n.student, n.subject) && !lastStatus[homeworkId(n)]?.done).length;
   const alerts  = notifications.filter(n =>
-    ['late','missing_equipment','absence','homework_not_done'].includes(n.type)).length;
+    ['late','missing_equipment','absence','homework_not_done'].includes(n.type) && isValidNotification(n)).length;
   const grades  = notifications.filter(n => n.type === 'grade').length;
   const calItems = hw
     + classEvents.filter(e => !e.includes('לא נמצאו') && isEventValidForCurrentChild(e)).length

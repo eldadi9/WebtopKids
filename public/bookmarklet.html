@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>עזרה: חידוש Session של Webtop</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 620px;
+      margin: 32px auto;
+      padding: 20px;
+      background: #f0f2f5;
+      color: #333;
+      line-height: 1.6;
+    }
+    h1 { font-size: 22px; margin-bottom: 6px; }
+    .subtitle { color: #666; margin-bottom: 20px; }
+    .step {
+      background: white;
+      border-radius: 10px;
+      padding: 16px 18px;
+      margin: 10px 0;
+      box-shadow: 0 1px 4px rgba(0,0,0,.10);
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+    }
+    .num {
+      background: #4CAF50;
+      color: white;
+      border-radius: 50%;
+      min-width: 30px;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      font-size: 15px;
+      margin-top: 2px;
+    }
+    .step-body { flex: 1; }
+    .step-body strong { display: block; margin-bottom: 4px; font-size: 15px; }
+    .note { color: #666; font-size: 13px; margin-top: 5px; }
+    .bookmarklet-btn {
+      display: inline-block;
+      background: #2196F3;
+      color: white;
+      padding: 10px 18px;
+      border-radius: 7px;
+      text-decoration: none;
+      font-size: 15px;
+      cursor: grab;
+      margin-top: 8px;
+      user-select: none;
+    }
+    .bookmarklet-btn:hover { background: #1565C0; }
+    code {
+      background: #eee;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 13px;
+    }
+    a.link { color: #1976D2; }
+    .success { color: #2e7d32; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>🔑 חידוש Session — Webtop</h1>
+  <p class="subtitle">ה-Session של Webtop פג. בצע את 4 הצעדים הבאים:</p>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="step-body">
+      <strong>גרור את הכפתור הבא לסרגל הסימניות של הדפדפן:</strong>
+      <br>
+      <a class="bookmarklet-btn" href="javascript:(function(){var names=['session','PHPSESSID','smartschool_session','.ASPXAUTH'];var found=null;for(var i=0;i<names.length;i++){var c=document.cookie.split(';').find(function(x){return x.trim().startsWith(names[i]+'=');});if(c){found=c.trim();break;}}if(!found){alert('Cookie לא נמצא!\nודא שאתה מחובר ל-Webtop ונסה שוב.');return;}var val='/cookie '+found.split('=').slice(1).join('=');if(navigator.clipboard){navigator.clipboard.writeText(val).then(function(){alert('✅ הועתק ל-clipboard!\n\nשלח ל-Telegram:\n'+val.slice(0,80)+(val.length>80?'...':''));}).catch(function(){prompt('העתק ידנית ושלח ל-Telegram:',val);});}else{prompt('העתק ידנית ושלח ל-Telegram:',val);}})();">
+        📋 Copy Webtop Cookie
+      </a>
+      <p class="note">לחץ וגרור את הכפתור הכחול לסרגל הסימניות (Bookmarks bar)</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">2</div>
+    <div class="step-body">
+      <strong>כנס לאתר Webtop והתחבר:</strong>
+      <a class="link" href="https://webtop.smartschool.co.il" target="_blank">https://webtop.smartschool.co.il</a>
+      <p class="note">ודא שאתה רואה את לוח הבקרה (לא דף הכניסה)</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">3</div>
+    <div class="step-body">
+      <strong>לחץ על הסימנייה "Copy Webtop Cookie" שיצרת:</strong>
+      <p class="note">תקבל חלון עם הודעה שהוא הועתק ל-clipboard</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">4</div>
+    <div class="step-body">
+      <strong>שלח את התוכן שהועתק ל-Telegram:</strong>
+      <p>יראה כך: <code>/cookie eyJhbGc...</code></p>
+      <p class="note">לאחר שליחה, המתן ~30 שניות — המערכת תתחדש אוטומטית ✅</p>
+    </div>
+  </div>
+
+  <div class="step" style="background:#e8f5e9; border: 1px solid #a5d6a7;">
+    <div class="num" style="background:#388E3C;">✓</div>
+    <div class="step-body">
+      <span class="success">זהו! המערכת תחדש את ה-session ותמשיך לאסוף נתונים.</span>
+      <p class="note">אם לא קיבלת אישור תוך 60 שניות, חזור על הצעדים.</p>
+    </div>
+  </div>
+</body>
+</html>

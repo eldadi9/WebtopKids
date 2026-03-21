@@ -233,31 +233,31 @@ body.theme-dark .top-bar {
   justify-content: space-between;
   align-items: center;
   flex-wrap: nowrap;
-  padding: 1rem 1.25rem;
+  padding: 1.5rem 2rem;
 }
-.header-figma .header-icons   { order: 1; flex-shrink: 0; display: flex; align-items: center; gap: 0.6rem; }
-.header-figma .header-center  { order: 0; flex: 1; justify-content: center; display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
-.header-figma .header-right   { order: -1; flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 0.25rem; }
+.header-figma .header-icons   { order: 1; flex-shrink: 0; display: flex; align-items: center; gap: 1rem; }
+.header-figma .header-center  { order: 0; flex: 1; justify-content: center; display: flex; align-items: center; gap: 1rem; min-width: 0; }
+.header-figma .header-right   { order: -1; flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 0.4rem; }
 .header-figma .header-logo {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 1rem;
   justify-content: center;
   flex: 1;
 }
-.header-figma .logo-text { display: flex; flex-direction: column; align-items: center; line-height: 1.3; gap: 0.15rem; }
-.header-figma .header-logo .app-brand { font-size: 1.15rem; font-weight: 800; letter-spacing: 0.05em; }
-.header-figma .header-logo .app-subtitle { font-size: 0.85rem; font-weight: 600; opacity: 1; }
-.update-block-compact .last-update { font-size: 0.7rem; }
+.header-figma .logo-text { display: flex; flex-direction: column; align-items: center; line-height: 1.3; gap: 0.25rem; }
+.header-figma .header-logo .app-brand { font-size: 2.2rem; font-weight: 800; letter-spacing: 0.05em; }
+.header-figma .header-logo .app-subtitle { font-size: 1.4rem; font-weight: 600; opacity: 1; }
+.update-block-compact .last-update { font-size: 1.7rem; }
 
 /* ─── App logo — enlarged for Figma ──────────────────────────────────────── */
 .app-logo {
-  width: 52px; height: 52px;
-  border-radius: 16px;
+  width: 140px; height: 140px;
+  border-radius: 20px;
   object-fit: cover;
   flex-shrink: 0;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.25);
-  border: 2px solid rgba(255,255,255,0.6);
+  box-shadow: 0 6px 24px rgba(0,0,0,0.30);
+  border: 3px solid rgba(255,255,255,0.7);
   background: rgba(255,255,255,0.2);
 }
 
@@ -284,42 +284,44 @@ body.theme-dark .top-bar {
 }
 .header-logo .app-subtitle { font-size: 0.9rem; }
 .student-name {
-  font-size: 1.15rem;
+  font-size: 2rem;
   font-weight: 800;
   line-height: 1.3;
   white-space: normal;
   word-break: keep-all;
   overflow-wrap: break-word;
-  max-width: 240px;
+  max-width: 300px;
   direction: rtl;
   unicode-bidi: embed;
   color: #fff;
 }
 .update-block  { display: flex; flex-direction: column; align-items: flex-end; gap: 0.1rem; }
-.last-update   { font-size: 0.72rem; color: rgba(255,255,255,0.85); white-space: nowrap; }
+.last-update   { font-size: 1.7rem; color: #ffffff; font-weight: 700; white-space: nowrap; }
 
 /* ─── Refresh button (primary action) ────────────────────────────────────── */
 .btn-refresh {
-  background: rgba(255,255,255,0.25);
+  background: rgba(255,255,255,0.9);
   backdrop-filter: blur(8px);
-  border: 2px solid rgba(255,255,255,0.6);
-  color: #fff;
-  padding: 0 0.6rem;
-  height: 52px; min-width: 52px;
+  border: 2px solid rgba(255,255,255,0.9);
+  color: #7c3aed;
+  padding: 0 1.1rem;
+  height: 50px; min-width: 50px;
   border-radius: 14px;
   cursor: pointer;
   font-family: inherit;
-  font-size: 1.3rem;
-  display: flex; align-items: center; justify-content: center; gap: 0.3rem;
+  font-size: 1.5rem;
+  display: flex; align-items: center; justify-content: center; gap: 0.4rem;
   transition: all var(--transition-fast);
   -webkit-tap-highlight-color: transparent;
   flex-shrink: 0;
-  font-weight: 700;
+  font-weight: 900;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.18);
 }
-.btn-refresh:hover  { background: rgba(255,255,255,0.35); }
+.btn-refresh:hover  { background: #ffffff; box-shadow: 0 4px 16px rgba(0,0,0,0.25); }
 .btn-refresh:active { transform: scale(0.94); }
 .btn-refresh:focus-visible { outline: 3px solid rgba(255,255,255,0.9); outline-offset: 2px; }
 .refresh-icon { line-height: 1; }
+.refresh-label { font-size: 0.95rem; font-weight: 800; color: #7c3aed; letter-spacing: 0.02em; }
 
 /* Theme toggle button */
 .btn-theme {
@@ -328,10 +330,10 @@ body.theme-dark .top-bar {
   border: 1px solid rgba(255,255,255,0.5);
   color: #fff;
   padding: 0;
-  width: 48px; min-height: 48px;
+  width: 50px; min-height: 50px;
   border-radius: 14px;
   cursor: pointer;
-  font-size: 1.2rem;
+  font-size: 1.5rem;
   display: flex; align-items: center; justify-content: center;
   transition: all 0.15s;
   -webkit-tap-highlight-color: transparent;
@@ -354,8 +356,8 @@ body.theme-dark .top-bar {
   border: 1px solid rgba(255,255,255,0.4);
   color: rgba(255,255,255,0.9);
   border-radius: 999px;
-  padding: 0.18rem 0.55rem;
-  font-size: 0.7rem;
+  padding: 0.35rem 1rem;
+  font-size: 1.1rem;
   font-weight: 600;
   cursor: pointer;
   font-family: inherit;
@@ -850,9 +852,75 @@ a.link-card:hover { opacity: 0.9; }
   .card { padding: 0.9rem 1.1rem; border-radius: var(--radius-lg); }
   .card-title { font-size: var(--text-card-mobile); }
   .card-desc { font-size: 0.9rem; }
-  .student-name { font-size: 0.95rem; max-width: calc(100vw - 145px); }
-  .app-logo { display: none; }  /* hidden on mobile — logo-banner shown above instead */
-  .app-brand { display: none; } /* also hide text brand — shown in logo-banner */
+  /* ── Mobile-only header overrides (phone vs desktop separation) ── */
+  .header-figma {
+    padding: 1rem;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  /* Logo: image on top, brand+subtitle stacked below */
+  .header-figma .header-logo { flex-direction: column; gap: 0.3rem; }
+  .header-figma .logo-text { display: flex; flex-direction: column; align-items: center; gap: 0.1rem; }
+  .header-figma .header-logo .app-brand { font-size: 1.15rem; }
+  .header-figma .header-logo .app-subtitle { font-size: 1.1rem; display: block; margin-top: 0; }
+
+  /* Student area: right side — only name+avatar, NO timestamps */
+  .header-figma .header-right,
+  .header-figma .student-info {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: flex-end !important;
+  }
+  .header-figma .student-name-row {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 0.4rem;
+  }
+  /* Hide timestamps from student area on mobile */
+  .header-figma .update-block,
+  .header-figma .update-block-compact {
+    display: none !important;
+  }
+
+  .last-update { font-size: 0.9rem; }
+  .student-name { font-size: 1.3rem; max-width: calc(100vw - 145px); }
+  .child-avatar { width: 28px; height: 28px; }
+  .student-pill { font-size: 0.7rem; padding: 0.18rem 0.55rem; }
+  .app-logo { display: none; }
+  .app-brand { display: none; }
+
+  /* Buttons + timestamps: left side, column layout */
+  .header-figma .header-icons {
+    flex-direction: column;
+    gap: 0.3rem;
+    align-items: flex-start;
+  }
+  .header-icons-btns {
+    display: flex;
+    flex-direction: row;
+    gap: 0.4rem;
+    align-items: center;
+  }
+  .update-block-mobile {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.1rem;
+  }
+  .update-block-mobile .last-update { font-size: 0.85rem; color: rgba(255,255,255,0.9); }
+  .btn-refresh,
+  .btn-theme {
+    height: 40px;
+    width: 40px;
+    min-width: 40px;
+    min-height: 40px;
+    font-size: 1rem;
+    padding: 0;
+    border-radius: 10px;
+  }
+  .refresh-label { display: none; }
   .error-banner { flex-wrap: wrap; }
   .error-text code { word-break: break-all; }
   .modal-content { padding: 0.7rem 1rem 2rem; }
@@ -878,9 +946,9 @@ a.link-card:hover { opacity: 0.9; }
     gap: 0.5rem;
   }
   .app-logo {
-    width: 32px;
-    height: 32px;
-    border-radius: 8px;
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
   }
   .app-brand { display: none; }
   .student-name {
@@ -893,10 +961,10 @@ a.link-card:hover { opacity: 0.9; }
   }
   .last-update { font-size: 0.65rem; }
   .btn-refresh {
-    width: 34px;
-    height: 34px;
-    font-size: 0.95rem;
-    border-radius: 8px;
+    width: 44px;
+    height: 44px;
+    font-size: 1.15rem;
+    border-radius: 10px;
   }
 
   /* Shrink stats bar */
@@ -1530,8 +1598,8 @@ body.theme-dark .btn-hw-history:hover { background: rgba(59,130,246,0.14); borde
 }
 .child-avatar-wrap:hover .avatar-upload-hint { opacity: 1; }
 .child-avatar {
-  width: 36px;
-  height: 36px;
+  width: 70px;
+  height: 70px;
   border-radius: 50%;
   object-fit: cover;
   border: 2px solid rgba(96, 165, 250, 0.40);
@@ -1695,20 +1763,20 @@ body.theme-dark .chip-trend-down { background: rgba(16,185,129,0.12);   color: #
   flex-direction: row;
   align-items: center;
   justify-content: center;
-  padding: var(--space-3xl) var(--space-2xl);
+  padding: 0.75rem 1rem;
   background: linear-gradient(165deg, #0a0f1e 0%, #0d1529 25%, #1e293b 60%, #1a2235 100%);
   border-bottom: 1px solid var(--border);
-  gap: var(--space-2xl);
-  min-height: 180px;
+  gap: 1rem;
+  min-height: 0;
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
 }
 .logo-banner-img {
-  width: 110px;
-  height: 110px;
+  width: 140px;
+  height: 140px;
   border-radius: var(--radius-xl);
   object-fit: cover;
-  box-shadow: 0 6px 28px rgba(59, 130, 246, 0.45), 0 2px 12px rgba(0,0,0,0.4);
-  border: 2px solid rgba(96, 165, 250, 0.25);
+  box-shadow: 0 8px 36px rgba(59, 130, 246, 0.5), 0 2px 16px rgba(0,0,0,0.4);
+  border: 3px solid rgba(96, 165, 250, 0.35);
   animation: pulse-glow 3s ease-in-out infinite;
   flex-shrink: 0;
 }
@@ -1724,6 +1792,8 @@ body.theme-dark .chip-trend-down { background: rgba(16,185,129,0.12);   color: #
 /* Hide banner on desktop — header logo is enough */
 @media (min-width: 641px) {
   .logo-banner { display: none; }
+  .update-block-mobile { display: none; }
+  .header-icons-btns { display: contents; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════

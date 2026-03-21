@@ -4,7 +4,41 @@
       "Bash(WEBTOP_CAPTURE=true node webtop_scrape.mjs)",
       "Bash(node -c webtop_scrape.mjs)",
       "Bash(WEBTOP_DEBUG=1 node webtop_scrape.mjs)",
-      "Bash(node -e \"let d='''';process.stdin.on\\(''data'',c=>d+=c\\);process.stdin.on\\(''end'',\\(\\)=>{const j=JSON.parse\\(d\\);console.log\\(''ok:'',j.ok\\);console.log\\(''notifications:'',j.data?.notifications?.length\\);console.log\\(''messages:'',j.data?.messages?.length\\);console.log\\(''approvals:'',j.data?.approvals?.length\\);console.log\\(''signoffs:'',j.data?.signoffs?.length\\);console.log\\(''classEvents sample:'',j.data?.classEvents?.[0]?.slice\\(0,80\\)\\);console.log\\(''msg sample:'',JSON.stringify\\(j.data?.messages?.[0]\\)\\);console.log\\(''approval sample:'',JSON.stringify\\(j.data?.approvals?.[0]?.title\\)\\);console.log\\(''students:'',j.data?._debug?.studentsFound\\);const types=[...new Set\\(\\(j.data?.notifications||[]\\).map\\(n=>n.type\\)\\)];console.log\\(''notif types:'',types.join\\('', ''\\)\\);const students=[...new Set\\(\\(j.data?.notifications||[]\\).map\\(n=>n.student\\)\\)];console.log\\(''notif students:'',students.join\\('', ''\\)\\)}\\)\")"
+      "Bash(node -e \"let d='''';process.stdin.on\\(''data'',c=>d+=c\\);process.stdin.on\\(''end'',\\(\\)=>{const j=JSON.parse\\(d\\);console.log\\(''ok:'',j.ok\\);console.log\\(''notifications:'',j.data?.notifications?.length\\);console.log\\(''messages:'',j.data?.messages?.length\\);console.log\\(''approvals:'',j.data?.approvals?.length\\);console.log\\(''signoffs:'',j.data?.signoffs?.length\\);console.log\\(''classEvents sample:'',j.data?.classEvents?.[0]?.slice\\(0,80\\)\\);console.log\\(''msg sample:'',JSON.stringify\\(j.data?.messages?.[0]\\)\\);console.log\\(''approval sample:'',JSON.stringify\\(j.data?.approvals?.[0]?.title\\)\\);console.log\\(''students:'',j.data?._debug?.studentsFound\\);const types=[...new Set\\(\\(j.data?.notifications||[]\\).map\\(n=>n.type\\)\\)];console.log\\(''notif types:'',types.join\\('', ''\\)\\);const students=[...new Set\\(\\(j.data?.notifications||[]\\).map\\(n=>n.student\\)\\)];console.log\\(''notif students:'',students.join\\('', ''\\)\\)}\\)\")",
+      "Bash(node -e \":*)",
+      "Bash(ssh -o ConnectTimeout=5 -o BatchMode=yes root@76.13.8.113 \"grep -E ''TELEGRAM'' /root/webtop/.env 2>/dev/null || echo ''No Telegram vars found''\")",
+      "Bash(ssh -o ConnectTimeout=5 -o BatchMode=yes root@76.13.8.113 \"cat /root/webtop/.env\")",
+      "Bash(ssh -o ConnectTimeout=5 -o BatchMode=yes root@76.13.8.113 \"ls /root/webtop/*.env 2>/dev/null; ls /root/webtop/ | head -20\")",
+      "Bash(ssh -o BatchMode=yes root@76.13.8.113 \"cat /root/webtop/children_config.json\")",
+      "Bash(ssh -o BatchMode=yes root@76.13.8.113 \"node -e \"\"const c=require\\(''/root/webtop/children_config.json''\\); c.children.forEach\\(ch=>{console.log\\(''name:'', ch.name, ''| grade:'', ch.grade, ''| photo:'', ch.photo?''YES \\(''+ch.photo.slice\\(0,30\\)+''\\)'':''NO''\\)}\\);\"\"\")",
+      "Bash(curl -s \"http://76.13.8.113:3001/api/children\")",
+      "Bash(node -e \"let d='''''''';process.stdin.on\\(''''data'''',c=>d+=c\\);process.stdin.on\\(''''end'''',\\(\\)=>{const j=JSON.parse\\(d\\);j.children?.forEach\\(c=>console.log\\(''''name:'''',c.name,''''photo:'''',c.photo?''''YES'''':''''NO''''\\)\\);}\\);\")",
+      "Bash(scp public/style.css root@76.13.8.113:/root/webtop/public/)",
+      "Bash(node -e \"let d='''''''';process.stdin.on\\(''''data'''',c=>d+=c\\);process.stdin.on\\(''''end'''',\\(\\)=>{const j=JSON.parse\\(d\\);j.children?.forEach\\(c=>console.log\\(''''name:'''',c.name,''''photo len:'''',c.photo?.length||0\\)\\);}\\);\")",
+      "Bash(ssh -o:*)",
+      "Bash(curl -s \"https://api.telegram.org/bot8790124249:AAGXefvpMZmVrv6GPX1Q0FZi8YhT7dwdcoE/sendMessage\" -d \"chat_id=7773889743&text=✅ WebtopKids Telegram מחובר! התראות יישלחו לכאן.\")",
+      "Bash(node -e \"let d='''''''';process.stdin.on\\(''''data'''',c=>d+=c\\);process.stdin.on\\(''''end'''',\\(\\)=>{const j=JSON.parse\\(d\\);console.log\\(''''ok:'''',j.ok,''''message_id:'''',j.result?.message_id,''''error:'''',j.description\\);}\\)\")",
+      "Bash(scp server.js root@76.13.8.113:/root/webtop/)",
+      "Bash(curl -s -X POST \"https://api.telegram.org/bot8790124249:AAGXefvpMZmVrv6GPX1Q0FZi8YhT7dwdcoE/sendMessage\" -H \"Content-Type: application/json\" -d '{\"\"\"\"chat_id\"\"\"\":\"\"\"\"7773889743\"\"\"\",\"\"\"\"parse_mode\"\"\"\":\"\"\"\"HTML\"\"\"\",\"\"\"\"text\"\"\"\":\"\"\"\"🎓 <b>WebtopKids - בדיקת מערכת ✅</b>\\\\n\\\\nהבוט מחובר ופועל תקין!\\\\n\\\\n👧 יולי | 👧 אמי\\\\n📅 15.03.2026\\\\n\\\\n🔔 התראות, ציונים ושיעורי בית יישלחו לכאן אוטומטית.\"\"\"\"}')",
+      "Bash(node -e \"let d='''''''';process.stdin.on\\(''''data'''',c=>d+=c\\);process.stdin.on\\(''''end'''',\\(\\)=>{const j=JSON.parse\\(d\\);console.log\\(''''ok:'''',j.ok,''''msg_id:'''',j.result?.message_id,''''error:'''',j.description||''''none''''\\);}\\)\")",
+      "Bash(scp public/index.html root@76.13.8.113:/root/webtop/public/)",
+      "Bash(scp public/app.js public/style.css public/index.html root@76.13.8.113:/root/webtop/public/)",
+      "Bash(node deploy.mjs)",
+      "Bash(scp public/style.css public/index.html root@76.13.8.113:/root/webtop/public/)",
+      "Bash(ssh root@76.13.8.113 \"pm2 restart webtop\")",
+      "Bash(curl -s --connect-timeout 5 http://76.13.8.113:3001/api/data)",
+      "Bash(powershell.exe -ExecutionPolicy Bypass -File deploy.ps1 -NoPrompt)",
+      "Bash(ssh root@76.13.8.113 \"pm2 restart webtop && sleep 2 && pm2 list\")",
+      "Bash(curl -s -X POST http://76.13.8.113:3001/telegram/webhook -H \"Content-Type: application/json\" -d '{\"\"message\"\":{\"\"text\"\":\"\"/status\"\",\"\"chat\"\":{\"\"id\"\":\"\"test\"\"}}}')",
+      "Bash(node -e \"const fs=require\\(''fs''\\); const d=JSON.parse\\(fs.readFileSync\\(''C:/Users/Master_PC/.claude.json'',''utf8''\\)\\); console.log\\(JSON.stringify\\(Object.keys\\(d\\), null, 2\\)\\)\")",
+      "Bash(node -e \"const fs=require\\(''fs''\\); const d=JSON.parse\\(fs.readFileSync\\(''C:/Users/Master_PC/.claude.json'',''utf8''\\)\\); const keys=Object.keys\\(d.projects||{}\\); console.log\\(''Projects count:'', keys.length\\); keys.slice\\(0,3\\).forEach\\(k=>{ const p=d.projects[k]; console.log\\(''KEY:'', k.slice\\(-80\\)\\); console.log\\(''  fields:'', Object.keys\\(p\\).join\\('', ''\\)\\); }\\);\")"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\Master_PC\\Desktop\\Projects Eldad\\01_Active_Projects\\n8n\\Webtop_APP\\docs\\superpowers"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "n8n-mcp"
+  ]
 }
