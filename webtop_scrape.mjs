@@ -47,6 +47,83 @@ function loadEnv() {
 }
 loadEnv();
 
+// ── SmartSchool REST API (pywebtop-style, Node.js fetch) ──────────────────
+const API_BASE = 'https://webtopserver.smartschool.co.il';
+let apiToken = null;
+
+async function apiPost(path, body, extraHeaders = {}) {
+  const headers = { 'Content-Type': 'application/json; charset=utf-8', ...extraHeaders };
+  if (apiToken) headers['Cookie'] = `webToken=${apiToken}`;
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API ${path} → HTTP ${res.status}`);
+  return res.json();
+}
+
+async function apiLoadSavedSession() {
+  // Use saved browser session token instead of re-login (direct REST login fails — school-specific Data key unknown)
+  const sessionPath = join(__dirname, '.webtop_session.json');
+  if (!existsSync(sessionPath)) throw new Error('No saved session file (.webtop_session.json)');
+  const session = JSON.parse(readFileSync(sessionPath, 'utf8'));
+  const tokenCookie = (session.cookies || []).find(c => c.name === 'webToken');
+  if (!tokenCookie) throw new Error('webToken cookie not found in session file');
+  // URL-decode: cookie headers need raw value, not percent-encoded
+  apiToken = decodeURIComponent(tokenCookie.value);
+}
+
+async function apiGetInitDashboard() {
+  // Returns childrens[] with correct id, classCode, classNum, firstName
+  const body = await apiPost('/server/api/dashboard/InitDashboard', {});
+  if (!body.status) throw new Error(`InitDashboard failed: ${JSON.stringify(body)}`);
+  return body.data?.childrens || [];
+}
+
+async function apiSwitchStudent(encryptedId) {
+  const body = await apiPost('/server/api/user/ChangeUser', {
+    StudentId: encryptedId, institutionCode: null, savedUser: '', userType: null,
+  });
+  if (!body.status) throw new Error(`ChangeUser failed: ${JSON.stringify(body)}`);
+  if (body.data?.token) apiToken = body.data.token;
+  return body.data;
+}
+
+async function apiGetHomework(encryptedId, classCode, classNumber) {
+  const body = await apiPost('/server/api/dashboard/GetHomeWork', {
+    id: encryptedId, ClassCode: classCode, ClassNumber: classNumber,
+  });
+  return body?.data || body || [];
+}
+
+async function apiGetDisciplineEvents(encryptedId, classCode) {
+  const body = await apiPost('/server/api/dashboard/GetPupilDiciplineEvents', {
+    id: encryptedId, ClassCode: classCode,
+  });
+  return body?.data || body || [];
+}
+
+async function apiGetMessages(pageId = 1) {
+  const body = await apiPost('/server/api/messageBox/GetMessagesInbox', {
+    PageId: pageId, LabelId: 0, HasRead: null, SearchQuery: '',
+  });
+  return body?.data || body || [];
+}
+
+async function apiGetSchedule(encryptedId, classCode, studyYear) {
+  const body = await apiPost('/server/api/PupilCard/GetPupilScheduale', {
+    weekIndex: 0, viewType: 0, studyYear,
+    studentID: encryptedId, classCode, moduleID: 10,
+  });
+  return body?.data || body || null;
+}
+
+async function apiGetUnreadNotifications() {
+  const body = await apiPost('/server/api/Menu/GetPreviewUnreadNotifications', {});
+  return body?.data || body || [];
+}
+
 // ── Config ────────────────────────────────────────────────────────────────────
 const BASE_URL      = "https://webtop.smartschool.co.il";
 const LOGIN_URL     = `${BASE_URL}/account/login`;
@@ -1111,6 +1188,31 @@ const LAUNCH_OPTS = {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 (async () => {
+  // ── API pre-fetch phase (fast REST calls before browser launch) ───────────
+  let apiStudents = [];
+  let apiScheduleByStudent = {};
+  try {
+    process.stderr.write('[api] Loading saved session token...\n');
+    await apiLoadSavedSession();
+    process.stderr.write('[api] Session token loaded\n');
+
+    // Get all children from InitDashboard (returns id, classCode, classNum, firstName)
+    try {
+      const childrens = await apiGetInitDashboard();
+      if (childrens && childrens.length > 0) {
+        apiStudents = childrens;
+        process.stderr.write(`[api] Found ${childrens.length} children from InitDashboard\n`);
+      }
+    } catch (e) {
+      process.stderr.write(`[api] InitDashboard failed: ${e.message}\n`);
+    }
+
+    // Schedule endpoint is blocked for this account — skip it
+    process.stderr.write('[api] Skipping schedule fetch (GetPupilScheduale is blocked for this account)\n');
+  } catch (e) {
+    process.stderr.write(`[api] REST API phase failed (will use browser only): ${e.message}\n`);
+  }
+
   // ── Persistent browser profile ────────────────────────────────────────────
   // SILENT BY DEFAULT: run headless. Browser only pops up when session expired (reCAPTCHA).
   let context = await chromium.launchPersistentContext(PROFILE_DIR, {
@@ -1198,13 +1300,16 @@ const LAUNCH_OPTS = {
       await context.close();
       process.exit(1);
     }
-    // Session expired — try auto-login with a fresh headed browser (no profile, so Angular loads correctly)
-    process.stderr.write("\n>>> Session expired. Attempting auto-login with fresh headed browser...\n\n");
+    // Session expired — fresh browser (no profile) so Angular login page loads; then inject cookies into profile.
+    // ברירת מחדל: אותו מצב headless כמו הריצה הראשית — כדי שלא יקפוץ חלון כש־push_loop רץ ברקע.
+    // אם התחברות אוטומטית נכשלת בלי חלון: הרץ פעם אחת עם WEBTOP_HEADLESS=false או WEBTOP_RENEW_HEADED=true
+    const renewHeaded = process.env.WEBTOP_RENEW_HEADED === 'true';
+    const renewHeadless = renewHeaded ? false : HEADLESS;
+    process.stderr.write(
+      `\n>>> Session expired. Auto-login (fresh browser, headless=${renewHeadless})...\n\n`,
+    );
     await context.close();
-    // Use a temporary fresh browser (no persistent profile) so the Angular login page renders properly.
-    // After login, extract cookies and inject them into the persistent profile.
-    // Use stealth browser to bypass reCAPTCHA bot-detection during auto-login.
-    const freshBrowser = await chromiumExtra.launch({ headless: false, ...LAUNCH_OPTS });
+    const freshBrowser = await chromiumExtra.launch({ headless: renewHeadless, ...LAUNCH_OPTS });
     const freshPage = await freshBrowser.newPage();
     freshPage.setDefaultTimeout(TIMEOUT);
     await freshPage.setViewportSize({ width: 1400, height: 900 });
@@ -1519,6 +1624,7 @@ const LAUNCH_OPTS = {
       signoffs:             signoffs,
       approvals:            approvals,
       usefulLinks:          usefulLinks,
+      scheduleByStudent:    apiScheduleByStudent,
       _debug: {
         headingsFound:  mainDashboard?._headingsFound || [],
         studentsFound:  studentList || [],

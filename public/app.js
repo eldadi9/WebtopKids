@@ -8,6 +8,7 @@ let lastEvents     = [];   // special events from /api/events (birthdays, meetin
 let lastChildren   = { children: [] }; // per-child config: valid subjects, grade, birthdate
 let lastInsights   = null; // smart insights from /api/insights
 let lastExternalLinks = []; // external links (forms, webtop pages)
+let lastSchedule = {}; // weekly schedule per student from /api/schedule
 
 /* ─── Card data store (index → notification object) ───────────────────── */
 let _cardStore = {};
@@ -76,6 +77,7 @@ async function fetchAll(forceRefresh = false) {
       fetch('/api/children', fetchOpts),
       fetch('/api/insights' + (currentStudent ? '?student=' + encodeURIComponent(currentStudent) : ''), fetchOpts),
       fetch('/api/external-links', fetchOpts),
+      fetch('/api/schedule', fetchOpts),
     ]);
     const dataRes = results[0].status === 'fulfilled' ? results[0].value : null;
     const statusRes = results[1].status === 'fulfilled' ? results[1].value : null;
@@ -98,6 +100,9 @@ async function fetchAll(forceRefresh = false) {
     lastInsights = await safeJson(insightsRes, null);
     const ext = await safeJson(extLinksRes, { links: [] });
     lastExternalLinks = ext?.links || [];
+    const scheduleRes = results[6].status === 'fulfilled' ? results[6].value : null;
+    const scheduleData = await safeJson(scheduleRes, { ok: false, schedule: {} });
+    lastSchedule = scheduleData?.schedule || {};
     if (!Array.isArray(lastEvents)) lastEvents = [];
 
     if (!lastData?.ok) {
@@ -154,7 +159,11 @@ function render(data, status) {
       document.querySelector('.top-bar').after(staleBanner);
     }
     const ageMin = data.cacheAge ? Math.round(data.cacheAge / 60) : '?';
-    staleBanner.textContent = `⚠️ הנתונים ישנים (${ageMin} דקות) — משוך למטה לבקשת עדכון או הפעל start_daemon.bat במחשב הבית`;
+    const thr = data.staleThresholdMin != null ? data.staleThresholdMin : 45;
+    const home = data.expectsHomePush !== false;
+    staleBanner.textContent = home
+      ? `⚠️ הנתונים ישנים (${ageMin} דק׳; מעל ~${thr} דק׳ בלי דחיפה מהבית) — משוך למטה לבקשת סריקה או ודא ש־start_daemon.bat / node push_loop.mjs רצים במחשב הבית`
+      : `⚠️ הנתונים ישנים (${ageMin} דק׳) — רענון או בדוק את סקרייפר השרת (USE_LOCAL_SCRAPER)`;
   } else if (staleBanner) {
     staleBanner.remove();
   }
@@ -212,6 +221,7 @@ function rerender() {
   })();
   renderApprovals();
   renderMessages();
+  renderSchedule();
   renderExternalLinks();
   const schoolEvResolved = resolveSchoolEventsForStudent(
     lastData?.data?.schoolEventsByStudent, currentStudent, lastData?.data?.schoolEvents || []);
@@ -1273,6 +1283,107 @@ function renderExternalLinks() {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   SECTION: מערכת שעות
+   ═══════════════════════════════════════════════════════════════ */
+function renderSchedule() {
+  const el = document.getElementById('schedule-list');
+  if (!el) return;
+
+  const studentNames = Object.keys(lastSchedule);
+  if (studentNames.length === 0) {
+    el.innerHTML = '<div class="empty-state">📅 מערכת שעות אינה זמינה (הגישה לנתון זה חסומה בחשבון זה)</div>';
+    return;
+  }
+
+  // Filter to current student if one is selected
+  const names = currentStudent
+    ? studentNames.filter(n => studentMatch(n, currentStudent))
+    : studentNames;
+
+  if (names.length === 0) {
+    el.innerHTML = '<div class="empty-state">📅 אין מערכת שעות לתלמיד זה</div>';
+    return;
+  }
+
+  let html = '';
+  for (const name of names) {
+    const rawSchedule = lastSchedule[name];
+    html += renderStudentSchedule(name, rawSchedule);
+  }
+  el.innerHTML = html;
+}
+
+function renderStudentSchedule(studentName, rawSchedule) {
+  if (!rawSchedule) return '';
+
+  // The API returns various formats — handle both array and object
+  let days = [];
+  if (Array.isArray(rawSchedule)) {
+    days = rawSchedule;
+  } else if (rawSchedule.days) {
+    days = rawSchedule.days;
+  } else if (rawSchedule.schedule) {
+    days = Array.isArray(rawSchedule.schedule) ? rawSchedule.schedule : Object.values(rawSchedule.schedule);
+  } else {
+    // Unknown format — schedule blocked or unsupported
+    return `<div class="schedule-card">
+      <div class="empty-state">📅 מערכת שעות אינה זמינה עבור ${esc(studentName)}</div>
+    </div>`;
+  }
+
+  // Day names in Hebrew
+  const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי'];
+  const today = new Date().getDay(); // 0=Sun, 1=Mon, ...
+
+  let html = `<div class="schedule-card">
+    <div class="schedule-header">
+      <span class="schedule-student-name">📅 מערכת שעות — ${esc(studentName)}</span>
+      <span class="schedule-week-label">השבוע הנוכחי</span>
+    </div>
+    <div class="schedule-grid">`;
+
+  for (let di = 0; di < days.length; di++) {
+    const day = days[di];
+    if (!day) continue;
+
+    // Day can be object with lessons array, or just an array of lessons
+    const lessons = Array.isArray(day) ? day : (day.lessons || day.periods || day.items || []);
+    const dayName = day.dayName || day.name || DAY_NAMES[di] || `יום ${di+1}`;
+    const isToday = di === today;
+
+    if (lessons.length === 0) continue;
+
+    html += `<div class="schedule-day${isToday ? ' schedule-today' : ''}">
+      <div class="schedule-day-header">${esc(dayName)}${isToday ? ' ★' : ''}</div>
+      <div class="schedule-lessons">`;
+
+    for (const lesson of lessons) {
+      if (!lesson) continue;
+      const subject = lesson.subjectName || lesson.subject || lesson.name || lesson.title || '';
+      const teacher = lesson.teacherName || lesson.teacher || '';
+      const room = lesson.room || lesson.roomNumber || '';
+      const num = lesson.lessonNumber || lesson.period || lesson.index || '';
+      const time = lesson.startTime || lesson.time || '';
+
+      if (!subject) continue;
+
+      html += `<div class="schedule-lesson">
+        <span class="lesson-num">${esc(String(num))}</span>
+        <span class="lesson-subject">${esc(subject)}</span>
+        ${teacher ? `<span class="lesson-teacher">${esc(teacher)}</span>` : ''}
+        ${room ? `<span class="lesson-room">כיתה ${esc(room)}</span>` : ''}
+        ${time ? `<span class="lesson-time">${esc(time)}</span>` : ''}
+      </div>`;
+    }
+
+    html += `</div></div>`;
+  }
+
+  html += `</div></div>`;
+  return html;
+}
+
+/* ═══════════════════════════════════════════════════════════════
    SECTION: הכל (פיד מלא — כל המידע: התראות, אירועים, הודעות, אישורים)
    ═══════════════════════════════════════════════════════════════ */
 function renderFeed(notifications, classEvents) {
@@ -1825,7 +1936,7 @@ document.addEventListener('touchend', async e => {
     try {
       await fetch('/api/trigger', { method: 'POST' });
       ptrTextEl.textContent = '✉️ בקשה נשלחה — אם push_loop רץ בבית, ייעדכן תוך דקה';
-      await fetchAll(false);
+      await fetchAll(true);
       // Poll for fresh data (home PC may push within 1-2 min)
       const prevAge = lastData?.cacheAge ?? 999999;
       let attempts = 0;

@@ -1,11 +1,9 @@
 @echo off
-:: install_watchdog.bat — Registers the watchdog as a Windows Task Scheduler task.
-:: Run ONCE as Administrator to install. After that it runs automatically.
+:: install_watchdog.bat — רישום משימת Windows (לא קשור ל-Webtop API / דפדפן)
+:: Registers Task Scheduler job: restarts push_loop.mjs if the Node process died.
+:: Run ONCE as Administrator.
 ::
-:: What it creates:
-::   Task name: WebtopKids-Watchdog
-::   Trigger:   At logon + every 5 minutes
-::   Action:    watchdog.bat (checks if push_loop is alive, restarts if not)
+:: Task name: WebtopKids-Watchdog — Trigger: logon + every 5 min — Action: watchdog.bat
 
 cd /d "%~dp0"
 set TASK_NAME=WebtopKids-Watchdog

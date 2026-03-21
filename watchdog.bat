@@ -1,7 +1,11 @@
 @echo off
-:: watchdog.bat — Auto-recovery watchdog for push_loop.mjs
-:: Run every 5 minutes via Windows Task Scheduler.
-:: If push_loop is dead (stale/missing lock), clears the lock and restarts it.
+:: watchdog.bat — מנגנון Windows בלבד / Windows-only process guard
+::
+:: זה לא קשור ל-API, לדפדפן או ל-CAPTCHA. זה רק בודק אם תהליך Node `push_loop.mjs`
+:: עדיין רץ אחרי אתחול מחשב / קריסה. אם לא — מפעיל אותו מחדש.
+::
+:: Not related to Webtop API vs browser. It only restarts push_loop.mjs if the
+:: Node process died (reboot, crash, closed window). Safe to keep or remove from Task Scheduler.
 
 cd /d "%~dp0"
 set LOCK=.push_loop.lock
@@ -29,6 +33,6 @@ del %LOCK% 2>nul
 
 :START_LOOP
 echo [%date% %time%] Starting push_loop.mjs... >> %LOGFILE%
-start /MIN "WebtopKids Daemon" cmd /c "node push_loop.mjs >> keepalive.log 2>&1"
+start /MIN "WebtopKids Daemon" cmd /c "node push_loop.mjs >> push_loop_run.log 2>&1"
 echo [%date% %time%] push_loop.mjs launched >> %LOGFILE%
 exit /b 0

@@ -3,9 +3,9 @@
  * scrape_and_push.mjs — One-shot: scrape + push to VPS (no prompts)
  */
 import { readFileSync, existsSync } from 'fs';
-import { spawn } from 'child_process';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { runWebtopScraperChild } from './webtop_scraper_child.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -29,33 +29,9 @@ if (VPS_URL.includes('/api/push')) VPS_URL = VPS_URL.replace(/\/api\/push.*$/, '
 const PUSH_SECRET = process.env.PUSH_SECRET || 'webtop2026';
 
 async function runScraper() {
-  return new Promise((resolve, reject) => {
-    const pyScript = join(__dirname, 'webtop_api_fetch.py');
-    const jsScript = join(__dirname, 'webtop_scrape.mjs');
-    const usePython = existsSync(pyScript) && process.env.USE_API_FETCHER !== 'false';
-
-    let proc;
-    if (usePython) {
-      const pythonBin = process.env.PYTHON_BIN || 'python';
-      console.log(`[scrape_push] Using Python API fetcher (${pythonBin})`);
-      proc = spawn(pythonBin, [pyScript], { env: { ...process.env }, cwd: __dirname });
-    } else {
-      console.log('[scrape_push] Using Playwright scraper (fallback)');
-      proc = spawn(process.execPath, [jsScript], {
-        env: { ...process.env, WEBTOP_SESSION: join(__dirname, '.webtop_session.json') },
-        cwd: __dirname,
-      });
-    }
-
-    let stdout = '', stderr = '';
-    proc.stdout.on('data', d => (stdout += d));
-    proc.stderr.on('data', d => (stderr += d));
-    proc.on('close', code => {
-      if (stderr.trim()) console.log('[scraper-stderr]', stderr.trim().slice(0, 500));
-      if (code !== 0) return reject(new Error(`Scraper exited ${code}: ${stderr.slice(0, 400)}`));
-      try { resolve(JSON.parse(stdout.trim())); }
-      catch { reject(new Error(`JSON parse error: ${stdout.slice(0, 200)}`)); }
-    });
+  return runWebtopScraperChild({
+    log: (msg) => console.log(`[scrape_push] ${msg}`),
+    useScrapingLock: false,
   });
 }
 

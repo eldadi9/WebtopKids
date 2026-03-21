@@ -2,32 +2,69 @@
 """
 webtop_api_fetch.py — Direct Webtop REST API fetcher (replaces webtop_scrape.mjs)
 
-Calls the SmartSchool REST API directly — no browser, no session cookies to expire.
-Authenticates fresh on every run via username + password.
-Outputs the same JSON shape as webtop_scrape.mjs to stdout.
+Calls the SmartSchool REST API directly — no browser, no CAPTCHA on the fetch path.
+Authenticates each run via LoginByUserNameAndPassword (WEBTOP_USER / WEBTOP_PASS),
+then uses webToken for API calls. If API login fails, falls back to webToken in
+WEBTOP_SESSION file (bookmarklet / Playwright).
 
 ENV:
-  WEBTOP_USER   — login username (required)
-  WEBTOP_PASS   — login password (required)
-  WEBTOP_BASE   — base URL (default: https://webtopserver.smartschool.co.il)
-  WEBTOP_DATA   — encrypted data param from login request (default provided)
+  WEBTOP_USER       — login username (for API login)
+  WEBTOP_PASS       — login password (for API login)
+  WEBTOP_BASE       — API base URL (default: https://webtopserver.smartschool.co.il)
+  WEBTOP_DATA       — encrypted "Data" field from the school login form (default provided)
+  WEBTOP_API_LOGIN           — if false, skip API login and use session file only
+  WEBTOP_SESSION_FALLBACK    — false = API only (fail if login returns no token). Default / unset = after
+                               failed API login, try .webtop_session.json (some schools block cold REST login).
+  WEBTOP_RECAPTCHA_RESPONSE  — optional; if set, sent on login POST when server requires reCAPTCHA v2 token.
+  WEBTOP_SKIP_TOKEN_VALIDATE — if true, do not call server to verify file webToken (debug only).
 """
 
 import json
 import os
 import re
 import sys
+import time
 import urllib.request
 import urllib.parse
 import urllib.error
 import http.cookiejar
 from datetime import datetime, timedelta
 
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load_env_file():
+    """Load `.env` into os.environ (same rules as push_loop.mjs: do not override existing vars)."""
+    path = os.path.join(_SCRIPT_DIR, ".env")
+    if not os.path.isfile(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                eq = line.find("=")
+                if eq < 0:
+                    continue
+                key, val = line[:eq].strip(), line[eq + 1 :].strip()
+                if val.startswith('"') and val.endswith('"'):
+                    val = val[1:-1]
+                elif val.startswith("'") and val.endswith("'"):
+                    val = val[1:-1]
+                if key and key not in os.environ:
+                    os.environ[key] = val
+    except OSError as e:
+        sys.stderr.write(f"[api] Could not read .env: {e}\n")
+
+
+_load_env_file()
+
 BASE_URL = os.environ.get("WEBTOP_BASE", "https://webtopserver.smartschool.co.il")
 USER = os.environ.get("WEBTOP_USER", "")
 PASS = os.environ.get("WEBTOP_PASS", "")
 DATA_PARAM = os.environ.get("WEBTOP_DATA", "+Aabe7FAdVluG6Lu+0ibrA==")
-SESSION_FILE = os.environ.get("WEBTOP_SESSION", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".webtop_session.json"))
+SESSION_FILE = os.environ.get("WEBTOP_SESSION", os.path.join(_SCRIPT_DIR, ".webtop_session.json"))
 TIMEOUT = 30
 NEW_NOTIF_DAYS = 21
 
@@ -51,26 +88,254 @@ def log(msg):
 
 
 def api_post(path, body, token=None):
-    """POST to Webtop API, returns parsed JSON response."""
+    """POST to Webtop API, returns parsed JSON response (3 tries on transient network errors)."""
     url = BASE_URL + path
-    data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(url, data=data)
-    req.add_header("Content-Type", "application/json")
-    req.add_header("Accept", "application/json")
-    req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-    req.add_header("Origin", "https://webtop.smartschool.co.il")
-    req.add_header("Referer", "https://webtop.smartschool.co.il/")
-    if token:
-        # webToken is HttpOnly cookie — must be sent as Cookie header
-        req.add_header("Cookie", f"webToken={urllib.parse.quote(token, safe='')}")
+    payload = json.dumps(body).encode("utf-8")
+    last_err = None
+    for attempt in range(3):
+        req = urllib.request.Request(url, data=payload)
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Accept", "application/json")
+        req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        req.add_header("Origin", "https://webtop.smartschool.co.il")
+        req.add_header("Referer", "https://webtop.smartschool.co.il/")
+        if token:
+            req.add_header("Cookie", f"webToken={urllib.parse.quote(token, safe='')}")
+        try:
+            with _opener.open(req, timeout=TIMEOUT) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            body_text = e.read().decode("utf-8", errors="replace")[:300]
+            raise RuntimeError(f"HTTP {e.code} on {path}: {body_text}")
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                log(f"api_post retry {attempt + 1}/3 {path}: {e}")
+                time.sleep(1.5 * (attempt + 1))
+            else:
+                raise RuntimeError(f"Request failed for {path}: {last_err}") from last_err
+
+
+def _token_from_cookie_jar():
+    """Read webToken set by Set-Cookie on login response (fallback if JSON has no token)."""
     try:
-        with _opener.open(req, timeout=TIMEOUT) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body_text = e.read().decode("utf-8", errors="replace")[:300]
-        raise RuntimeError(f"HTTP {e.code} on {path}: {body_text}")
+        for paths in _cookie_jar._cookies.values():
+            for cookies in paths.values():
+                c = cookies.get("webToken")
+                if c is not None and getattr(c, "value", None):
+                    return urllib.parse.unquote(c.value)
+    except Exception:
+        pass
+    return None
+
+
+def _deep_find_token(obj, depth=0):
+    """Find first string value for keys token/webToken (any casing) in nested dicts."""
+    if depth > 8:
+        return None
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(k, str) and k.lower() in ("token", "webtoken", "accesstoken") and isinstance(v, str) and len(v) > 24:
+                return v.strip()
+        for v in obj.values():
+            t = _deep_find_token(v, depth + 1)
+            if t:
+                return t
+    elif isinstance(obj, list):
+        for x in obj:
+            t = _deep_find_token(x, depth + 1)
+            if t:
+                return t
+    return None
+
+
+def _extract_token_from_login_response(resp):
+    """Normalize token from various API response shapes (incl. nested / PascalCase)."""
+    if not isinstance(resp, dict):
+        return None
+    data = resp.get("data")
+    nested = None
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            return data.strip() if len(data) > 80 and data.count(".") >= 2 else None
+    if isinstance(data, (dict, list)):
+        nested = _deep_find_token(data)
+    return _deep_find_token(resp) or nested
+
+
+def validate_web_token(token):
+    """
+    Lightweight server check: is this webToken still accepted?
+    Returns False if server clearly rejects; True if OK or uncertain (e.g. transient network — do not wipe good token).
+    """
+    if not token:
+        return False
+    raw = (os.environ.get("WEBTOP_SKIP_TOKEN_VALIDATE") or "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        log("Skipping token validation (WEBTOP_SKIP_TOKEN_VALIDATE)")
+        return True
+    try:
+        resp = api_post("/server/api/user/GetMultipleUsersForUser", {}, token=token)
+    except RuntimeError as e:
+        err = str(e)
+        if "HTTP 401" in err or "HTTP 403" in err:
+            log("Token validation: HTTP 401/403 — token invalid")
+            return False
+        log(f"Token validation: network/API error (keeping token): {err[:180]}")
+        return True
     except Exception as e:
-        raise RuntimeError(f"Request failed for {path}: {e}")
+        log(f"Token validation: unexpected {e!r} (keeping token)")
+        return True
+
+    st = resp.get("status")
+    if st is False:
+        msg = resp.get("message") or resp.get("errorDescription") or resp.get("errorId") or ""
+        log(f"Token validation: status=False — {str(msg)[:220]}")
+        return False
+    if st is True:
+        return True
+    # Some responses omit status but return data
+    if resp.get("data") is not None:
+        return True
+    log("Token validation: ambiguous response — treating as valid")
+    return True
+
+
+def login_via_api():
+    """
+    POST LoginByUserNameAndPassword; returns webToken or None on failure.
+    Does not open a browser (no reCAPTCHA on this endpoint when credentials are valid).
+    """
+    if not USER or not PASS:
+        return None
+    log("Logging in via API (LoginByUserNameAndPassword)...")
+    try:
+        login_body = {
+            "UserName": USER,
+            "Password": PASS,
+            "Data": DATA_PARAM,
+            "RememberMe": False,
+            "BiometricLogin": "",
+        }
+        captcha = (os.environ.get("WEBTOP_RECAPTCHA_RESPONSE") or "").strip()
+        if captcha:
+            login_body["gRecaptchaResponse"] = captcha
+        resp = api_post(
+            "/server/api/user/LoginByUserNameAndPassword",
+            login_body,
+            token=None,
+        )
+    except Exception as e:
+        log(f"API login request failed: {e}")
+        return None
+
+    token = _extract_token_from_login_response(resp) or _token_from_cookie_jar()
+    if token:
+        log("API login OK")
+        return token
+    srv = resp.get("message") or resp.get("errorDescription") or resp.get("errorId") or ""
+    if not (isinstance(srv, str) and srv.strip()) and resp.get("errorHTML"):
+        eh = resp.get("errorHTML", "")
+        if isinstance(eh, str):
+            srv = re.sub(r"<[^>]+>", " ", eh)
+            srv = " ".join(srv.split())[:400]
+    if not isinstance(srv, str):
+        srv = str(srv)
+    if len(srv) > 400:
+        srv = srv[:400] + "…"
+    d = resp.get("data")
+    eh = resp.get("errorHTML")
+    log(
+        "API login: no token — "
+        f"status={resp.get('status')!r} server={srv!r} "
+        f"data_type={type(d).__name__!r} errorHTML_len={len(str(eh or ''))} keys={list(resp.keys())}"
+    )
+    return None
+
+
+def save_token_to_session_file(token):
+    """Refresh .webtop_session.json so other tools (audit_api, Playwright) see a current webToken."""
+    try:
+        payload = {
+            "cookies": [
+                {
+                    "name": "webToken",
+                    "value": token,
+                    "domain": "webtop.smartschool.co.il",
+                    "path": "/",
+                    "httpOnly": True,
+                    "secure": True,
+                }
+            ]
+        }
+        with open(SESSION_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        log(f"Saved webToken to {SESSION_FILE}")
+    except OSError as e:
+        log(f"Could not write {SESSION_FILE}: {e}")
+
+
+def _session_fallback_allowed():
+    """Default: allow session file after API failure (many portals reject REST login without captcha)."""
+    raw = (os.environ.get("WEBTOP_SESSION_FALLBACK") or "").strip().lower()
+    if raw in ("false", "0", "no", "off"):
+        return False
+    return True
+
+
+def obtain_token():
+    """
+    Order: (1) API login if credentials; (2) session file only if token still valid on server;
+    (3) API login again if file token expired; (4) fail with clear message.
+    """
+    api_on = os.environ.get("WEBTOP_API_LOGIN", "true").lower() not in ("0", "false", "no")
+    allow_file = _session_fallback_allowed()
+
+    if api_on and USER and PASS:
+        token = login_via_api()
+        if token:
+            save_token_to_session_file(token)
+            return token
+        if not allow_file:
+            raise RuntimeError(
+                "API login failed — no browser fallback (WEBTOP_USER+WEBTOP_PASS set, "
+                "WEBTOP_SESSION_FALLBACK not true). Check stderr for server message; often fix is "
+                "WEBTOP_DATA (copy JSON field 'Data' from DevTools → Network on login POST) or password."
+            )
+        log("API login returned no token; checking .webtop_session.json on server…")
+
+    if allow_file:
+        try:
+            file_tok = load_token_from_session()
+        except Exception as e:
+            log(f"No usable session file yet: {e}")
+            file_tok = None
+        else:
+            if validate_web_token(file_tok):
+                log("Session file webToken is still valid — using it")
+                return file_tok
+            log("Session file webToken rejected by server — trying API login again")
+
+        if api_on and USER and PASS:
+            token = login_via_api()
+            if token:
+                save_token_to_session_file(token)
+                log("Got new webToken via API after invalid session file")
+                return token
+
+        if file_tok is not None:
+            raise RuntimeError(
+                "Webtop session expired and API login did not return a token. "
+                "Log in once in the browser to Webtop, or send /cookie to the bot, "
+                "or set WEBTOP_RECAPTCHA_RESPONSE if the school requires CAPTCHA on login."
+            )
+
+    raise RuntimeError(
+        "Could not authenticate: add WEBTOP_USER/WEBTOP_PASS (+ WEBTOP_DATA) for API login, "
+        "or set WEBTOP_SESSION_FALLBACK=true and provide .webtop_session.json (webToken)"
+    )
 
 
 def load_token_from_session():
@@ -127,44 +392,115 @@ def get_discipline_events(token, encrypted_id, class_code):
             "id": encrypted_id,
             "ClassCode": class_code,
         }, token=token)
-        result = resp.get("data") or []
-        return result if isinstance(result, list) else []
+        data = resp.get("data") or {}
+        if isinstance(data, list):
+            return data
+        # API returns {allowToViewThis, dataTable: {diciplineEvents: [...]}}
+        dt = data.get("dataTable") or {}
+        if isinstance(dt, list):
+            return dt
+        events = dt.get("diciplineEvents") or dt.get("disciplineEvents") or []
+        return events if isinstance(events, list) else []
     except Exception as e:
         log(f"GetPupilDiciplineEvents failed: {e}")
         return []
 
 
 def get_homework_api(token, encrypted_id, class_code, class_number):
-    """Get homework assignments."""
+    """Get homework assignments (current/future)."""
     try:
+        # ClassNumber must be int — API returns 400 if string
+        try:
+            class_num_int = int(class_number) if class_number else 0
+        except (ValueError, TypeError):
+            class_num_int = 0
         resp = api_post("/server/api/dashboard/GetHomeWork", {
             "id": encrypted_id,
             "ClassCode": class_code,
-            "ClassNumber": class_number,
+            "ClassNumber": class_num_int,
         }, token=token)
-        result = resp.get("data") or []
-        return result if isinstance(result, list) else []
+        data = resp.get("data") or {}
+        if isinstance(data, list):
+            return data
+        # API returns {allowToViewThis, dataTable: [...]}
+        dt = data.get("dataTable") or data.get("homeWork") or []
+        return dt if isinstance(dt, list) else []
     except Exception as e:
         log(f"GetHomeWork failed: {e}")
         return []
 
 
-def get_messages(token, page_id=0, label_id=0):
-    """Get inbox messages."""
+def get_lessons_and_homework(token, encrypted_id, class_code, student_name, period_id=1052, period_name="מחצית ב", weeks_back=8):
+    """Get lessons + homework history via PupilCard/GetPupilLessonsAndHomework.
+    Returns list of {date, subject, teacher, homeWork, descClass} for lessons that have homework.
+    """
+    results = []
+    study_year = datetime.now().year
+    for week_offset in range(0, -weeks_back - 1, -1):
+        try:
+            resp = api_post("/server/api/PupilCard/GetPupilLessonsAndHomework", {
+                "weekIndex": week_offset,
+                "viewType": 0,
+                "studyYear": study_year,
+                "studyYearName": f"תשפ\u05d4",
+                "studentID": encrypted_id,
+                "studentName": student_name,
+                "classCode": class_code,
+                "periodID": period_id,
+                "periodName": period_name,
+                "moduleID": 11,
+            }, token=token)
+            days = resp.get("data") or []
+            if not isinstance(days, list):
+                continue
+            for day in days:
+                date_iso = day.get("date", "")[:10]  # YYYY-MM-DD
+                # Convert to DD/MM/YYYY for consistency with is_recent()
+                try:
+                    y, m, d = date_iso.split("-")
+                    date_fmt = f"{d}/{m}/{y}"
+                except Exception:
+                    date_fmt = date_iso
+                for hour_data in (day.get("hoursData") or []):
+                    for sched in (hour_data.get("scheduale") or []):
+                        hw_text = (sched.get("homeWork") or "").strip()
+                        if hw_text:
+                            results.append({
+                                "date": date_fmt,
+                                "subject": sched.get("subject_name") or "",
+                                "teacher": sched.get("teacher") or "",
+                                "homeWork": hw_text,
+                                "hour": hour_data.get("hour"),
+                            })
+        except Exception as e:
+            log(f"GetPupilLessonsAndHomework week={week_offset} failed: {e}")
+    return results
+
+
+def get_messages(token, max_pages=5):
+    """Get inbox messages — API uses 1-based page IDs, 30 per page."""
+    all_msgs = []
     try:
-        resp = api_post("/server/api/messageBox/GetMessagesInbox", {
-            "PageId": page_id,
-            "LabelId": label_id,
-            "HasRead": None,
-            "SearchQuery": "",
-        }, token=token)
-        items = resp.get("data") or []
-        if isinstance(items, dict):
-            items = items.get("messages") or items.get("items") or []
-        return items if isinstance(items, list) else []
+        page = 1
+        while page <= max_pages:
+            resp = api_post("/server/api/messageBox/GetMessagesInbox", {
+                "PageId": page,
+                "LabelId": 0,
+                "HasRead": None,
+                "SearchQuery": "",
+            }, token=token)
+            items = resp.get("data") or []
+            if not isinstance(items, list) or not items:
+                break
+            all_msgs.extend(items)
+            total = items[0].get("count", 0) if items else 0
+            if len(all_msgs) >= total or len(items) < 30:
+                break
+            page += 1
+        log(f"GetMessagesInbox: {len(all_msgs)} messages fetched ({page} pages)")
     except Exception as e:
         log(f"GetMessagesInbox failed: {e}")
-        return []
+    return all_msgs
 
 
 # ── Type mapping ──────────────────────────────────────────────────────────────
@@ -173,6 +509,8 @@ TYPE_MAP = {
     "late": "late",
     "חיסור": "absence",
     "איחור": "late",
+    "נוכחות": "attendance",
+    "attendance": "attendance",
     "חוסר ציוד": "missing_equipment",
     "missing_equipment": "missing_equipment",
     "ציון": "grade",
@@ -228,6 +566,21 @@ def is_recent(date_dd_mm_yyyy, days=NEW_NOTIF_DAYS):
         return False
 
 
+def coerce_lesson_number(lesson):
+    """Lesson index from API; sometimes a Hebrew label (e.g. 'שפה') instead of a number."""
+    if lesson is None:
+        return None
+    if isinstance(lesson, int):
+        return lesson
+    s = str(lesson).strip()
+    if not s:
+        return None
+    try:
+        return int(s)
+    except ValueError:
+        return None
+
+
 def normalize_discipline_event(event, student_short_name):
     """Map a discipline event dict → our notification shape."""
     raw_type = (
@@ -262,7 +615,7 @@ def normalize_discipline_event(event, student_short_name):
         "type": ntype,
         "subject": subject,
         "date": date,
-        "lesson": int(lesson) if lesson is not None else None,
+        "lesson": coerce_lesson_number(lesson),
         "description": description,
         "homeworkText": None,
         "alertTime": alert_time,
@@ -289,7 +642,7 @@ def normalize_homework_event(hw, student_short_name):
         "type": "homework",
         "subject": subject,
         "date": date,
-        "lesson": int(lesson) if lesson is not None else None,
+        "lesson": coerce_lesson_number(lesson),
         "description": hw_text,
         "homeworkText": hw_text,
         "alertTime": None,
@@ -315,19 +668,23 @@ def normalize_message(msg, student_short_name=""):
             time_str = dt.strftime("%H:%M")
         except Exception:
             pass
-    sender = (msg.get("senderName") or msg.get("from") or msg.get("sender") or "").strip()
-    student_f = (msg.get("student_F_name") or "").strip()
-    student_l = (msg.get("student_L_name") or "").strip()
-    student = f"{student_f} {student_l}".strip() or student_short_name
+    # API uses student_F_name + student_L_name for the SENDER (teacher name)
+    sender_f = (msg.get("student_F_name") or "").strip()
+    sender_l = (msg.get("student_L_name") or "").strip()
+    sender = f"{sender_f} {sender_l}".strip()
+    if not sender:
+        sender = (msg.get("senderName") or msg.get("from") or msg.get("sender") or "").strip()
+    # hasRead is an integer (0/1), not a boolean isRead
+    has_read = msg.get("hasRead") or msg.get("isRead") or msg.get("read") or 0
     return {
-        "student": student,
+        "student": student_short_name,
         "subject": (msg.get("subject") or "(ללא נושא)").strip(),
         "from": sender,
         "fromRole": (msg.get("senderRole") or msg.get("role") or "").strip(),
         "date": date,
         "time": time_str,
         "body": (msg.get("body") or msg.get("content") or msg.get("message") or "")[:500].strip(),
-        "read": bool(msg.get("isRead") or msg.get("read") or False),
+        "read": bool(int(has_read)),
     }
 
 
@@ -357,7 +714,7 @@ def process_student(tok, child_info, short_name):
                 notifs.append(n)
         log(f"  discipline events: {len([n for n in notifs])} recent")
 
-        # Homework
+        # Homework (current/future from dashboard)
         hw_raw = get_homework_api(tok, enc_id, class_code, class_num)
         for hw in hw_raw:
             n = normalize_homework_event(hw, short_name)
@@ -369,7 +726,38 @@ def process_student(tok, child_info, short_name):
                     "text": n.get("homeworkText") or n.get("description") or "",
                     "lesson": n["lesson"],
                 })
-        log(f"  homework: {len(hw_list)} items")
+        log(f"  homework (dashboard): {len(hw_list)} items")
+
+        # Homework history via PupilCard (lessons + homework per week)
+        student_full_name = f"{child_info.get('lastName', '')} {child_info.get('firstName', '')}".strip()
+        hw_history = get_lessons_and_homework(tok, enc_id, class_code, student_full_name)
+        seen_hw_keys = {f"{h['date']}_{h['subject']}_{h['text'][:30]}" for h in hw_list}
+        for hw in hw_history:
+            key = f"{hw['date']}_{hw['subject']}_{hw['homeWork'][:30]}"
+            if key not in seen_hw_keys:
+                seen_hw_keys.add(key)
+                hw_list.append({
+                    "subject": hw["subject"],
+                    "date": hw["date"],
+                    "text": hw["homeWork"],
+                    "lesson": hw.get("hour"),
+                    "teacher": hw.get("teacher", ""),
+                    "source": "history",
+                })
+                # Include homework in notifications if within 60 days (wider window for history)
+                if is_recent(hw["date"], days=60):
+                    notifs.append({
+                        "student": short_name,
+                        "type": "homework",
+                        "subject": hw["subject"],
+                        "date": hw["date"],
+                        "lesson": hw.get("hour"),
+                        "description": hw["homeWork"],
+                        "homeworkText": hw["homeWork"],
+                        "alertTime": None,
+                        "alertDay": None,
+                    })
+        log(f"  homework total (incl. history): {len(hw_list)} items")
     else:
         log(f"  WARNING: no encrypted ID for {short_name} — skipping discipline/homework")
 
@@ -377,8 +765,19 @@ def process_student(tok, child_info, short_name):
 
 
 if __name__ == "__main__":
+    # רקע: רענון קובץ סשן / ניסיון לוגין API — בלי משיכת נתונים מלאה (נקרא מ-push_loop בתזמון)
+    if os.environ.get("WEBTOP_REFRESH_TOKEN_ONLY") == "1":
+        try:
+            t = obtain_token()
+            save_token_to_session_file(t)
+            log("[refresh] Proactive token refresh — session file updated")
+            sys.exit(0)
+        except Exception as ex:
+            log(f"[refresh] Skipped (will retry later): {ex}")
+            sys.exit(0)
+
     try:
-        token = load_token_from_session()
+        token = obtain_token()
 
         # ── Get linked students (multi-child accounts) ────────────────────────
         linked = get_linked_students(token)
@@ -506,7 +905,14 @@ if __name__ == "__main__":
         err_str = str(e)
         # Exit code 2 = session expired (same signal as Playwright scraper)
         # push_loop.mjs handles this by triggering the cookie recovery flow
-        if "401" in err_str or "Unauthorized" in err_str or "webToken not found" in err_str or "Session file not found" in err_str:
+        if (
+            "401" in err_str
+            or "Unauthorized" in err_str
+            or "webToken not found" in err_str
+            or "Session file not found" in err_str
+            or "Could not authenticate" in err_str
+            or "API login failed" in err_str
+        ):
             out({"ok": False, "error": err_str})
             sys.exit(2)
         out({"ok": False, "error": err_str})

@@ -13,10 +13,15 @@ npm-debug.log*
 .webtop_profile/
 
 # Runtime data
+.telegram_session_last.txt
 homework_status.json
 data_cache.json
 sent_reminders.json
 push_scrape.log
+push_loop_run.log
+push_loop_run.err.log
+.push_loop.lock
+.scraping_lock
 daemon.log
 discovery.json
 

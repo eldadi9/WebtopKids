@@ -8,6 +8,7 @@
     "dev": "node --watch server.js",
     "scrape": "node webtop_scrape.mjs",
     "push": "node push_loop.mjs",
+    "verify-push": "node verify_push_health.mjs",
     "test": "node test_system.mjs",
     "install-browsers": "npx playwright install chromium",
     "install-browsers-deps": "npx playwright install-deps chromium"

@@ -9,7 +9,7 @@
  *   - Maintains ONE persistent Playwright browser context (same .webtop_profile/ as scraper)
  *   - Uses playwright-extra + stealth plugin to avoid bot-detection
  *   - Pings dashboard every KEEPALIVE_INTERVAL minutes (default: 8)
- *   - If session expires: auto-logs in using stealth browser (no CAPTCHA popup expected)
+ *   - If session expires: auto-login (CapSolver or manual CAPTCHA in headed browser)
  *   - push_loop.mjs continues to run independently for data scraping
  *
  * Usage:
@@ -316,6 +316,17 @@ async function ping() {
 }
 
 // ─── Startup ──────────────────────────────────────────────────────────────────
+// push_loop + webtop_api_fetch.py renew auth each scrape (REST login). Browser keep-alive
+// only maintains .webtop_profile/ for Playwright — if Python fetcher is on, it fights for
+// the profile and triggers reCAPTCHA Telegram noise. Skip unless explicitly forced.
+const pyFetcherPath = join(__dirname, 'webtop_api_fetch.py');
+const pythonFetcherEnabled = existsSync(pyFetcherPath) && process.env.USE_API_FETCHER !== 'false';
+if (pythonFetcherEnabled && process.env.WEBTOP_FORCE_KEEPALIVE !== 'true') {
+  console.log('[keepalive] Not starting: USE_API_FETCHER uses webtop_api_fetch.py (no browser session needed).');
+  console.log('[keepalive] For Playwright-only setups or extra profile pings: WEBTOP_FORCE_KEEPALIVE=true');
+  process.exit(0);
+}
+
 console.log('╔═══════════════════════════════════════╗');
 console.log('║  Webtop Keep-Alive Daemon             ║');
 console.log('╚═══════════════════════════════════════╝');

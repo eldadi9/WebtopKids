@@ -2,7 +2,7 @@ import express from 'express';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { spawn } from 'child_process';
+import { runWebtopScraperChild } from './webtop_scraper_child.mjs';
 import { config as dotenvConfig } from 'dotenv';
 dotenvConfig();
 
@@ -123,34 +123,11 @@ function notifId(n) {
   return `${(n.type || '').trim()}_${(n.student || '').trim()}_${(n.subject || '').trim()}_${(n.date || '').trim()}_${(n.lesson || '').toString().trim()}`;
 }
 
-// ─── Scraper runner ───────────────────────────────────────────────────────────
+// ─── Scraper runner (timeout + SIGKILL — לא נתקע לנצח) ───────────────────────
 function runScraper() {
-  return new Promise((resolve, reject) => {
-    // Prefer Python API fetcher if available; fall back to Playwright scraper
-    const pyScript = join(__dirname, 'webtop_api_fetch.py');
-    const jsScript = join(__dirname, 'webtop_scrape.mjs');
-    const usePython = existsSync(pyScript) && process.env.USE_API_FETCHER !== 'false';
-
-    let proc;
-    if (usePython) {
-      const pythonBin = process.env.PYTHON_BIN || 'python';
-      console.log(`[scraper] Using Python API fetcher (${pythonBin})`);
-      proc = spawn(pythonBin, [pyScript], { env: { ...process.env }, cwd: __dirname });
-    } else {
-      console.log('[scraper] Using Playwright scraper (fallback)');
-      const env = { ...process.env, WEBTOP_SESSION: join(__dirname, '.webtop_session.json') };
-      proc = spawn(process.execPath, [jsScript], { env, cwd: __dirname });
-    }
-
-    let stdout = '', stderr = '';
-    proc.stdout.on('data', d => (stdout += d));
-    proc.stderr.on('data', d => (stderr += d));
-    proc.on('close', code => {
-      if (stderr.trim()) console.log('[scraper-stderr]', stderr.trim().slice(0, 500));
-      if (code !== 0) return reject(new Error(`Scraper exited ${code}: ${stderr.slice(0, 500)}`));
-      try { resolve(JSON.parse(stdout.trim())); }
-      catch { reject(new Error(`JSON parse failed: ${stdout.slice(0, 300)}`)); }
-    });
+  return runWebtopScraperChild({
+    log: (msg) => console.log(`[scraper] ${msg}`),
+    useScrapingLock: false,
   });
 }
 
@@ -396,6 +373,11 @@ function startLocalScraper() {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 const PUSH_SECRET = (process.env.PUSH_SECRET || 'webtop2026').trim();
+/** מעל כמה דקות בלי עדכון מטמון נחשב "ישן" (ברירת מחדל: 45 — מעט מעל 2×15 דק׳ בין דחיפות) */
+const DATA_STALE_AFTER_MINUTES = parseInt(process.env.DATA_STALE_AFTER_MINUTES || '45', 10);
+const DATA_STALE_SECONDS = DATA_STALE_AFTER_MINUTES * 60;
+/** true כשהשרת לא מריץ סקרייפר מקומי ומצפה ל־POST /api/push מהמחשב הביתי */
+const EXPECTS_HOME_PUSH = process.env.USE_LOCAL_SCRAPER === 'false';
 
 // POST /api/push — receive scraped data from local machine
 app.post('/api/push', async (req, res) => {
@@ -477,8 +459,15 @@ app.get('/api/data', (req, res) => {
   }
   if (cache.data) {
     const cacheAge = Math.round((Date.now() - cache.timestamp) / 1000);
-    const stale    = cacheAge > 30 * 60; // stale after 30 min
-    return res.json({ ...cache.data, cached: true, cacheAge, stale });
+    const stale = cacheAge > DATA_STALE_SECONDS;
+    return res.json({
+      ...cache.data,
+      cached: true,
+      cacheAge,
+      stale,
+      staleThresholdMin: DATA_STALE_AFTER_MINUTES,
+      expectsHomePush: EXPECTS_HOME_PUSH,
+    });
   }
   res.status(503).json({
     ok: false,
@@ -494,20 +483,27 @@ app.get('/api/status', (req, res) => { res.json(loadStatus()); });
 app.get('/api/status/system', (req, res) => {
   const cacheAge = cache.data ? Math.round((Date.now() - cache.timestamp) / 1000) : null;
   const notifCount = cache.data?.data?.notifications?.length ?? 0;
-  const linkCount = cache.data?.data?.usefulLinks?.length ?? 0;
-  const hasValidLinks = linkCount > 0 && !(cache.data?.data?.usefulLinks || []).some(l => (l.href || '').includes('forgotPassword'));
+  const links = cache.data?.data?.usefulLinks || [];
+  const linkCount = links.length;
+  const loginPageInLinks = links.some(l => (l.href || '').includes('forgotPassword'));
+  // Python API fetcher often sends usefulLinks: [] — still valid if not a login page
+  const dataValid = !loginPageInLinks;
   res.json({
     ok: true,
     cacheAge,
     cacheAgeMin: cacheAge != null ? Math.round(cacheAge / 60) : null,
-    stale: cacheAge != null && cacheAge > 30 * 60,
+    stale: cacheAge != null && cacheAge > DATA_STALE_SECONDS,
+    staleThresholdMin: DATA_STALE_AFTER_MINUTES,
+    expectsHomePush: EXPECTS_HOME_PUSH,
     notifCount,
     linkCount,
-    dataValid: hasValidLinks && notifCount >= 0,
+    dataValid,
     triggerPending,
     message: !cache.data
       ? 'אין נתונים — הרץ fresh_pull או start_daemon במחשב הבית'
-      : hasValidLinks ? 'המערכת פעילה' : 'הנתונים נראים לא תקינים (דף התחברות?) — הרץ WEBTOP_CAPTURE=true',
+      : loginPageInLinks
+        ? 'הנתונים נראים לא תקינים (דף התחברות?) — הרץ WEBTOP_CAPTURE=true'
+        : 'המערכת פעילה',
   });
 });
 
@@ -520,7 +516,7 @@ app.get('/api/health', (req, res) => {
   // 1. Cache freshness
   if (!cache.data) {
     checks.push({ name: 'cache', status: 'FAIL', detail: 'No cached data' });
-  } else if (cacheAge > 30 * 60) {
+  } else if (cacheAge > DATA_STALE_SECONDS) {
     checks.push({ name: 'cache', status: 'WARN', detail: `Stale: ${Math.round(cacheAge/60)}min old` });
   } else {
     checks.push({ name: 'cache', status: 'OK', detail: `${Math.round(cacheAge/60)}min old` });
@@ -585,6 +581,12 @@ app.get('/api/external-links', (req, res) => {
       return res.json(JSON.parse(readFileSync(EXTERNAL_LINKS_FILE, 'utf8')));
   } catch {}
   res.json({ links: [] });
+});
+
+// GET /api/schedule — weekly schedule per student
+app.get('/api/schedule', (req, res) => {
+  const schedule = cache.data?.data?.scheduleByStudent || {};
+  res.json({ ok: true, schedule });
 });
 
 // POST /api/children/:name/photo — save base64 photo for a child
@@ -835,7 +837,7 @@ app.post('/telegram/webhook', async (req, res) => {
         : null;
       const d = cache.data?.data;
       const notifCount = d?.notifications?.length ?? 0;
-      const isStale = ageMin !== null && ageMin > 30;
+      const isStale = ageMin !== null && ageMin > DATA_STALE_AFTER_MINUTES;
       const isLoginPage = (d?.usefulLinks || []).some(l => (l.href || '').includes('forgotPassword'));
       const lines = [
         isStale ? '⚠️ נתונים ישנים!' : '✅ המערכת פעילה',
@@ -915,7 +917,7 @@ async function handleTelegramMessage(msg) {
       const notifCount = d?.notifications?.length ?? 0;
       const isLoginPage = (d?.usefulLinks || []).some(l => (l.href || '').includes('forgotPassword'));
       const lines = [
-        (ageMin !== null && ageMin > 30) ? '⚠️ נתונים ישנים!' : '✅ המערכת פעילה',
+        (ageMin !== null && ageMin > DATA_STALE_AFTER_MINUTES) ? '⚠️ נתונים ישנים!' : '✅ המערכת פעילה',
         ageMin !== null ? `🕐 עדכון אחרון: לפני ${ageMin} דקות` : '📭 אין נתונים במטמון',
         `🔔 התראות: ${notifCount}`,
         isLoginPage ? '🔴 Session פג — שלח /cookie' : '',
