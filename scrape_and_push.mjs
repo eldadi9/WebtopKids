@@ -30,14 +30,28 @@ const PUSH_SECRET = process.env.PUSH_SECRET || 'webtop2026';
 
 async function runScraper() {
   return new Promise((resolve, reject) => {
-    const proc = spawn(process.execPath, [join(__dirname, 'webtop_scrape.mjs')], {
-      env: { ...process.env, WEBTOP_SESSION: join(__dirname, '.webtop_session.json') },
-      cwd: __dirname,
-    });
+    const pyScript = join(__dirname, 'webtop_api_fetch.py');
+    const jsScript = join(__dirname, 'webtop_scrape.mjs');
+    const usePython = existsSync(pyScript) && process.env.USE_API_FETCHER !== 'false';
+
+    let proc;
+    if (usePython) {
+      const pythonBin = process.env.PYTHON_BIN || 'python';
+      console.log(`[scrape_push] Using Python API fetcher (${pythonBin})`);
+      proc = spawn(pythonBin, [pyScript], { env: { ...process.env }, cwd: __dirname });
+    } else {
+      console.log('[scrape_push] Using Playwright scraper (fallback)');
+      proc = spawn(process.execPath, [jsScript], {
+        env: { ...process.env, WEBTOP_SESSION: join(__dirname, '.webtop_session.json') },
+        cwd: __dirname,
+      });
+    }
+
     let stdout = '', stderr = '';
     proc.stdout.on('data', d => (stdout += d));
     proc.stderr.on('data', d => (stderr += d));
     proc.on('close', code => {
+      if (stderr.trim()) console.log('[scraper-stderr]', stderr.trim().slice(0, 500));
       if (code !== 0) return reject(new Error(`Scraper exited ${code}: ${stderr.slice(0, 400)}`));
       try { resolve(JSON.parse(stdout.trim())); }
       catch { reject(new Error(`JSON parse error: ${stdout.slice(0, 200)}`)); }
@@ -62,6 +76,13 @@ async function pushToVPS(data) {
 (async () => {
   console.log('[scrape_push] Scraping webtop...');
   const data = await runScraper();
+
+  if (!data?.ok) {
+    console.error('[scrape_push] Scraper returned ok=false — skipping push to preserve cached data');
+    console.error('[scrape_push] Reason:', data?.error || 'unknown');
+    process.exit(1);
+  }
+
   console.log(`[scrape_push] Got ${data?.data?.notifications?.length ?? 0} notifications`);
 
   console.log(`[scrape_push] Pushing to ${VPS_URL}...`);

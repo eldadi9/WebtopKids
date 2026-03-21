@@ -21,10 +21,11 @@
  *   POLL_INTERVAL   — seconds between trigger polls (default: 30)
  */
 
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs';
 import { spawn }                    from 'child_process';
 import { join, dirname }            from 'path';
 import { fileURLToPath }            from 'url';
+import { savePendingCookie }        from './cookie_injector.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -60,6 +61,28 @@ if (!VPS_URL || VPS_URL.includes('your-')) {
   process.exit(1);
 }
 
+// ─── Single-instance lock (prevents duplicate Telegram alerts) ────────────────
+const LOCK_FILE     = join(__dirname, '.push_loop.lock');
+const SCRAPING_LOCK = join(__dirname, '.scraping_lock'); // signals webtop_keepalive to yield profile
+if (existsSync(LOCK_FILE)) {
+  const lockPid = readFileSync(LOCK_FILE, 'utf8').trim();
+  // Check if the PID from lock file is still alive
+  let alive = false;
+  try {
+    process.kill(parseInt(lockPid, 10), 0); // signal 0 = existence check only
+    alive = true;
+  } catch {}
+  if (alive && lockPid !== String(process.pid)) {
+    console.error(`❌  Another push_loop is already running (PID ${lockPid}). Exiting.`);
+    console.error(`    Kill it first: taskkill /PID ${lockPid} /F`);
+    process.exit(1);
+  }
+}
+writeFileSync(LOCK_FILE, String(process.pid));
+process.on('exit',    () => { try { unlinkSync(LOCK_FILE); } catch {} try { unlinkSync(SCRAPING_LOCK); } catch {} });
+process.on('SIGINT',  () => process.exit(0));
+process.on('SIGTERM', () => process.exit(0));
+
 console.log('╔═══════════════════════════════════════╗');
 console.log('║  Webtop Push Loop — Home Daemon       ║');
 console.log('╚═══════════════════════════════════════╝');
@@ -70,18 +93,49 @@ console.log(`  Started:   ${new Date().toLocaleString('he-IL')}`);
 console.log('');
 
 // ─── Run the scraper ──────────────────────────────────────────────────────────
-function runScraper() {
+let activeScraperProc = null; // track child so we can kill it if needed
+
+async function runScraper() {
+  // Kill previous scraper if still running (shouldn't happen, but safety net)
+  if (activeScraperProc) {
+    try { activeScraperProc.kill(); } catch {}
+    activeScraperProc = null;
+  }
+
+  // Prefer Python API fetcher if available; fall back to Playwright scraper
+  const pyScript = join(__dirname, 'webtop_api_fetch.py');
+  const jsScript = join(__dirname, 'webtop_scrape.mjs');
+  const usePython = existsSync(pyScript) && process.env.USE_API_FETCHER !== 'false';
+
+  if (!usePython) {
+    // Write scraping lock — signals webtop_keepalive to close its context and yield the profile lock.
+    writeFileSync(SCRAPING_LOCK, String(Date.now()));
+    await new Promise(r => setTimeout(r, 3000));
+  }
+
   return new Promise((resolve, reject) => {
-    const scraperPath = join(__dirname, 'webtop_scrape.mjs');
-    const env = {
-      ...process.env,
-      WEBTOP_SESSION: join(__dirname, '.webtop_session.json'),
-    };
-    const proc = spawn(process.execPath, [scraperPath], { env, cwd: __dirname });
+    let proc;
+    if (usePython) {
+      const pythonBin = process.env.PYTHON_BIN || 'python';
+      log(`Using Python API fetcher (${pythonBin})`);
+      proc = spawn(pythonBin, [pyScript], { env: { ...process.env }, cwd: __dirname });
+    } else {
+      log('Using Playwright scraper (fallback)');
+      const env = { ...process.env, WEBTOP_SESSION: join(__dirname, '.webtop_session.json') };
+      proc = spawn(process.execPath, [jsScript], { env, cwd: __dirname });
+    }
+    activeScraperProc = proc;
     let stdout = '', stderr = '';
     proc.stdout.on('data', d => (stdout += d));
     proc.stderr.on('data', d => (stderr += d));
     proc.on('close', code => {
+      activeScraperProc = null;
+      if (!usePython) {
+        // Release profile lock — keepalive will reopen its context on next ping
+        try { unlinkSync(SCRAPING_LOCK); } catch {}
+      }
+      if (stderr.trim()) log(`[scraper-stderr] ${stderr.trim().slice(0, 500)}`);
+      if (code === 2) return reject(new Error('Session expired'));
       if (code !== 0) return reject(new Error(`Scraper exited ${code}: ${stderr.slice(0, 400)}`));
       try { resolve(JSON.parse(stdout.trim())); }
       catch { reject(new Error(`JSON parse error: ${stdout.slice(0, 200)}`)); }
@@ -176,11 +230,18 @@ async function scrapeAndPush(reason = 'scheduled', attempt = 1) {
     const links = data?.data?.usefulLinks || [];
     const isLoginPage = links.some(l => (l.href || '').includes('forgotPassword'));
     if (isLoginPage) {
-      const msg = '⚠️ Webtop session expired — open the app and run:\n  WEBTOP_CAPTURE=true node webtop_scrape.mjs';
-      log(`ERROR — Scrape returned login page. Run WEBTOP_CAPTURE=true node webtop_scrape.mjs to re-login.`);
+      const msg = [
+        '⚠️ Session של Webtop פג!',
+        '',
+        'כדי לחדש — לחץ פעמיים על הקובץ בשולחן העבודה:',
+        '📁 "חדש Webtop Session"',
+        '',
+        'התחבר בדפדפן שנפתח → הדפדפן ייסגר לבד → הסנכרון יחזור אוטומטית.',
+      ].join('\n');
+      log('ERROR — Scrape returned login page. Sending Telegram alert with recovery instructions.');
       await sendTelegram(msg);
-      scrapeRunning = false;
-      return; // no retry — needs manual intervention
+      await waitForCookieAndResume();
+      return;
     }
     const notifCount = data?.data?.notifications?.length ?? 0;
     log(`Scraper OK — ${notifCount} notifications`);
@@ -206,10 +267,18 @@ async function scrapeAndPush(reason = 'scheduled', attempt = 1) {
   } catch (e) {
     log(`ERROR — ${e.message}`);
     if (e.message.includes('Session expired')) {
-      await sendTelegram('⚠️ Webtop session expired — open the app and run:\n  WEBTOP_CAPTURE=true node webtop_scrape.mjs');
-      log('Telegram alert sent — session expired, manual login required');
-      scrapeRunning = false;
-      return; // no retry — needs manual intervention
+      const msg = [
+        '⚠️ Session של Webtop פג!',
+        '',
+        'כדי לחדש — לחץ פעמיים על הקובץ בשולחן העבודה:',
+        '📁 "חדש Webtop Session"',
+        '',
+        'התחבר בדפדפן שנפתח → הדפדפן ייסגר לבד → הסנכרון יחזור אוטומטית.',
+      ].join('\n');
+      await sendTelegram(msg);
+      log('Telegram alert sent — waiting for session recovery via desktop shortcut');
+      await waitForCookieAndResume();
+      return;
     }
     if (attempt < MAX_RETRIES) {
       log(`Retrying in ${RETRY_DELAY}s… (attempt ${attempt + 1}/${MAX_RETRIES})`);
@@ -217,6 +286,7 @@ async function scrapeAndPush(reason = 'scheduled', attempt = 1) {
       await scrapeAndPush(reason, attempt + 1);
     } else {
       log(`All ${MAX_RETRIES} attempts failed — will try again at next scheduled interval`);
+      await sendTelegram(`⚠️ WebtopKids — דחיפת נתונים נכשלה\n\n${MAX_RETRIES} ניסיונות עקביים נכשלו.\nהנתונים לא עודכנו.\n\nשגיאה: ${e.message.slice(0, 200)}`);
       scrapeRunning = false;
     }
   }
@@ -238,6 +308,43 @@ async function pollForTrigger() {
   } catch {
     // Network blip — silent (will retry on next poll interval)
   }
+}
+
+// ─── Poll VPS for pending cookie (after session expiry) ──────────────────────
+async function pollForCookie() {
+  try {
+    const res = await fetch(
+      `${VPS_URL}/api/poll-cookie?secret=${encodeURIComponent(PUSH_SECRET)}`,
+      { signal: AbortSignal.timeout(8_000) },
+    );
+    if (!res.ok) return null;
+    const json = await res.json();
+    if (json?.pending && json?.cookie) {
+      log(`[cookie] Received cookie from VPS (${json.cookie.length} chars)`);
+      savePendingCookie(json.cookie);
+      return json.cookie;
+    }
+  } catch {
+    // Network blip — silent
+  }
+  return null;
+}
+
+// ─── Wait for cookie recovery then resume ────────────────────────────────────
+async function waitForCookieAndResume() {
+  log('[cookie] Waiting for /cookie command via Telegram (up to 30 min)...');
+  scrapeRunning = false;
+  // Poll every 15s for up to 30 minutes (120 × 15s = 30min)
+  for (let i = 0; i < 120; i++) {
+    await new Promise(r => setTimeout(r, 15_000));
+    const cookie = await pollForCookie();
+    if (cookie) {
+      log('[cookie] Cookie received — resuming scrape now');
+      await scrapeAndPush('cookie-recovery');
+      return;
+    }
+  }
+  log('[cookie] Timed out waiting for cookie (30 min) — resuming normal schedule');
 }
 
 // ─── Telegram alert ──────────────────────────────────────────────────────────
@@ -275,7 +382,6 @@ setInterval(() => scrapeAndPush('scheduled'), SCRAPE_INTERVAL * 60 * 1000);
 setInterval(pollForTrigger, POLL_INTERVAL * 1000);
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
-process.on('SIGINT',  () => { log('Stopped by user (SIGINT)');  process.exit(0); });
-process.on('SIGTERM', () => { log('Stopped by system (SIGTERM)'); process.exit(0); });
+// (SIGINT/SIGTERM already registered above near lock file setup)
 
 log(`Push loop running — Ctrl+C to stop`);

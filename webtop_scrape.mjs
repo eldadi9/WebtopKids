@@ -19,7 +19,12 @@
  *   WEBTOP_HEADLESS    override headless mode ("false" to watch)
  */
 
-import { chromium } from "playwright";
+import { chromium as chromiumPlain } from "playwright";
+import { chromium as chromiumExtra } from "playwright-extra";
+import StealthPlugin from "puppeteer-extra-plugin-stealth";
+chromiumExtra.use(StealthPlugin());
+// Use stealth for fresh auto-login browser; use plain playwright for persistent profile
+const chromium = chromiumPlain;
 import { resolve, dirname, join } from "path";
 import { readFileSync, existsSync } from "fs";
 import { fileURLToPath } from "url";
@@ -314,8 +319,16 @@ async function fillAndSubmitLogin(page) {
   await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
   await sleep(2000);
 
-  // Fill username — type slowly like a human to pass reCAPTCHA v3
-  const userInput = page.locator('input[type="text"].mat-input-element, input[type="text"][formcontrolname], input[name="username"], input[id*="user"]').first();
+  // Accept cookies banner if present
+  const cookieBtn = page.locator('button:has-text("אשר"), button:has-text("קבל"), button:has-text("אישור")').first();
+  if (await cookieBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await cookieBtn.click().catch(() => {});
+    await sleep(800);
+    process.stderr.write('[info] Accepted cookies banner\n');
+  }
+
+  // Fill username
+  const userInput = page.locator('input[type="text"].mat-input-element').first();
   await userInput.waitFor({ timeout: TIMEOUT });
   await userInput.click();
   await sleep(300);
@@ -331,19 +344,68 @@ async function fillAndSubmitLogin(page) {
 
   await sleep(800);
 
-  // Wait for submit button to become enabled (reCAPTCHA v3 auto-passes in headed browser)
-  const submitBtn = page.locator('button[type="submit"]').first();
+  // ── Solve reCAPTCHA v2 via 2captcha API (if key configured) ──────────────
+  const TWOCAPTCHA_KEY = process.env.TWOCAPTCHA_KEY;
+  const RECAPTCHA_SITEKEY = "6Lf-Bz4qAAAAAClftyz9ZpD7TJ93bQ15wpoiuLLJ";
+
+  if (TWOCAPTCHA_KEY) {
+    process.stderr.write('[captcha] Solving reCAPTCHA via 2captcha...\n');
+    try {
+      // Submit CAPTCHA task
+      const submitRes = await fetch(
+        `https://2captcha.com/in.php?key=${TWOCAPTCHA_KEY}&method=userrecaptcha&googlekey=${RECAPTCHA_SITEKEY}&pageurl=${LOGIN_URL}&json=1`,
+        { signal: AbortSignal.timeout(15000) }
+      );
+      const submitJson = await submitRes.json();
+      if (submitJson.status !== 1) throw new Error(`2captcha submit failed: ${submitJson.request}`);
+      const taskId = submitJson.request;
+      process.stderr.write(`[captcha] Task submitted (ID: ${taskId}), waiting for solution...\n`);
+
+      // Poll for result (up to 3 minutes)
+      let token = null;
+      for (let i = 0; i < 36; i++) {
+        await sleep(5000);
+        const pollRes = await fetch(
+          `https://2captcha.com/res.php?key=${TWOCAPTCHA_KEY}&action=get&id=${taskId}&json=1`,
+          { signal: AbortSignal.timeout(10000) }
+        );
+        const pollJson = await pollRes.json();
+        if (pollJson.status === 1) { token = pollJson.request; break; }
+        if (pollJson.request !== 'CAPCHA_NOT_READY') throw new Error(`2captcha error: ${pollJson.request}`);
+      }
+      if (!token) throw new Error('2captcha timed out after 3 minutes');
+
+      // Inject token into the page
+      await page.evaluate((t) => {
+        const el = document.getElementById('g-recaptcha-response');
+        if (el) { el.value = t; el.style.display = 'block'; }
+        // Also try to find hidden textarea in reCAPTCHA iframe
+        document.querySelectorAll('textarea[name="g-recaptcha-response"]').forEach(ta => { ta.value = t; });
+        // Trigger Angular change detection
+        const btn = document.querySelector('button[type="submit"]');
+        if (btn) btn.dispatchEvent(new Event('click', { bubbles: true }));
+      }, token);
+      process.stderr.write('[captcha] Token injected\n');
+      await sleep(1000);
+    } catch (captchaErr) {
+      process.stderr.write(`[captcha] 2captcha failed: ${captchaErr.message} — falling back to manual\n`);
+    }
+  }
+
+  // Wait for submit button to be enabled (either via 2captcha token or manual CAPTCHA solve)
+  process.stderr.write('[info] Waiting for submit button (manual CAPTCHA if needed, up to 5 min)...\n');
   await page.waitForFunction(
     () => {
       const btn = document.querySelector('button[type="submit"]');
       return btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true';
     },
-    { timeout: 60000 }
+    { timeout: 300000 }
   ).catch(() => {
-    process.stderr.write('[warn] Submit button still disabled after 60s, attempting click anyway\n');
+    process.stderr.write('[warn] Submit button still disabled, attempting click anyway\n');
   });
 
   await sleep(500);
+  const submitBtn = page.locator('button[type="submit"]').first();
   await submitBtn.click();
   await page.waitForURL(/dashboard/, { timeout: 90000 });
 }
@@ -1056,6 +1118,27 @@ const LAUNCH_OPTS = {
     ...LAUNCH_OPTS,
   });
 
+  // ── Inject pending cookie from Telegram /cookie recovery flow ─────────────
+  const PENDING_COOKIE_FILE = join(__dirname, '.webtop_cookie_pending.json');
+  if (existsSync(PENDING_COOKIE_FILE)) {
+    try {
+      const { unlinkSync } = await import('fs');
+      const pending = JSON.parse(readFileSync(PENDING_COOKIE_FILE, 'utf8'));
+      await context.addCookies([{
+        name:     pending.name  || 'session',
+        value:    pending.value,
+        domain:   pending.domain || 'webtop.smartschool.co.il',
+        path:     pending.path  || '/',
+        httpOnly: pending.httpOnly ?? true,
+        secure:   pending.secure   ?? true,
+      }]);
+      unlinkSync(PENDING_COOKIE_FILE);
+      process.stderr.write('[scrape] Injected session cookie from recovery flow\n');
+    } catch (e) {
+      process.stderr.write(`[scrape] Cookie inject failed: ${e.message}\n`);
+    }
+  }
+
   let page = await context.newPage();
   page.setDefaultTimeout(TIMEOUT);
   await page.setViewportSize({ width: 1400, height: 900 });
@@ -1093,31 +1176,66 @@ const LAUNCH_OPTS = {
   const needsLogin = currentUrl.includes("/account/login") || currentUrl.includes("/login");
 
   if (needsLogin) {
-    if (!CAPTURE_MODE && !USER) {
+    if (CAPTURE_MODE) {
+      // Browser is open (headed) — wait for user to log in and reach the dashboard (up to 5 minutes)
+      process.stderr.write("\n>>> Browser opened for manual login. Log in and wait — profile will be saved automatically.\n\n");
+      // Wait until we are NOT on the login page anymore AND a dashboard element is visible
+      // NOTE: must override the page default timeout (30s) with a larger value for manual login
+      page.setDefaultTimeout(300_000);
+      await page.waitForFunction(
+        () => !window.location.href.includes('/account/login') && !window.location.href.includes('/login'),
+        { timeout: 300_000, polling: 1000 }
+      );
+      page.setDefaultTimeout(TIMEOUT);
+      await sleep(5000); // let the dashboard fully load and session cookies write to disk
+      process.stderr.write("\n>>> Logged in! Profile saved.\n\n");
+      out({ ok: true, message: "Profile saved to " + PROFILE_DIR + ". Run without WEBTOP_CAPTURE to scrape data." });
+      await context.close();
+      return;
+    }
+    if (!USER) {
       out({ ok: false, error: "Not logged in and no credentials. Run with WEBTOP_CAPTURE=true first." });
       await context.close();
       process.exit(1);
     }
-    if (HEADLESS) {
-      // reCAPTCHA v3 passes in headed browser — relaunch headed and auto-fill credentials
-      await context.close();
-      process.stderr.write("\n>>> Session expired. Relaunching headed browser to auto-login...\n\n");
+    // Session expired — try auto-login with a fresh headed browser (no profile, so Angular loads correctly)
+    process.stderr.write("\n>>> Session expired. Attempting auto-login with fresh headed browser...\n\n");
+    await context.close();
+    // Use a temporary fresh browser (no persistent profile) so the Angular login page renders properly.
+    // After login, extract cookies and inject them into the persistent profile.
+    // Use stealth browser to bypass reCAPTCHA bot-detection during auto-login.
+    const freshBrowser = await chromiumExtra.launch({ headless: false, ...LAUNCH_OPTS });
+    const freshPage = await freshBrowser.newPage();
+    freshPage.setDefaultTimeout(TIMEOUT);
+    await freshPage.setViewportSize({ width: 1400, height: 900 });
+    try {
+      await fillAndSubmitLogin(freshPage);
+      process.stderr.write("\n>>> Auto-login succeeded! Extracting session cookies...\n\n");
+      // Extract all cookies from the fresh session
+      const freshCookies = await freshBrowser.contexts()[0].cookies();
+      await freshBrowser.close();
+      // Re-open the persistent profile and inject the new cookies
       context = await chromium.launchPersistentContext(PROFILE_DIR, {
-        headless: false,
+        headless: HEADLESS,
         ...LAUNCH_OPTS,
       });
+      await context.addCookies(freshCookies);
       page = await context.newPage();
       page.setDefaultTimeout(TIMEOUT);
       await page.setViewportSize({ width: 1400, height: 900 });
-      await fillAndSubmitLogin(page);
-      await dismissCookies();
-    } else {
-      await doLogin(page);
-      await dismissCookies();
+      await page.goto(DASHBOARD_URL, { waitUntil: "networkidle", timeout: TIMEOUT });
+      await sleep(2000);
+      process.stderr.write("\n>>> Session restored. Continuing scrape.\n\n");
+    } catch (loginErr) {
+      process.stderr.write(`\n>>> Auto-login failed: ${loginErr.message}\n>>> Falling back to Telegram recovery.\n\n`);
+      await freshBrowser.close().catch(() => {});
+      out({ ok: false, error: "Session expired — awaiting cookie recovery via Telegram." });
+      process.exit(2);
     }
   }
 
   if (CAPTURE_MODE) {
+    // Already logged in — profile is valid
     out({ ok: true, message: "Profile saved to " + PROFILE_DIR + ". Run without WEBTOP_CAPTURE to scrape data." });
     await context.close();
     return;
@@ -1241,6 +1359,10 @@ const LAUNCH_OPTS = {
       `classEvents: ${(dashboard.classEvents||[]).length}, ` +
       `homework: ${(dashboard.homework||[]).length}, ` +
       `grades: ${(dashboard.grades||[]).length}\n`);
+    if ((dashboard.grades||[]).length === 0)
+      process.stderr.write(`[warn] grades card returned empty for "${studentName || "(single)"}" — will fall back to notification-based grades\n`);
+    if ((dashboard.classEvents||[]).length === 0)
+      process.stderr.write(`[warn] classEvents card returned empty for "${studentName || "(single)"}"\n`);
 
     // Store ALL dashboard data per-student (not just classEvents)
     if (studentName !== null) {
@@ -1321,6 +1443,35 @@ const LAUNCH_OPTS = {
     if (shortName !== fullName) {
       if (!homeworkByStudent[shortName]) homeworkByStudent[shortName] = [];
       homeworkByStudent[shortName].push(entry);
+    }
+  }
+
+  // ── Build gradesByStudent from NOTIFICATIONS as fallback ──────────────────
+  // Dashboard "ציונים שוטפים" card only shows recent grades — often empty.
+  // Grade notifications in the 21-day window are the reliable source.
+  // Only use notification fallback when the dashboard card returned empty.
+  for (const n of allNotifications) {
+    if (n.type !== "grade" || !n.student) continue;
+    const shortName = n.student;
+    const fullName = (studentList || []).find(s => s.includes(shortName)) || shortName;
+    // Only backfill — don't overwrite if dashboard card already provided data
+    if (!gradesByStudent[fullName] || gradesByStudent[fullName].length === 0) {
+      if (!gradesByStudent[fullName]) gradesByStudent[fullName] = [];
+      gradesByStudent[fullName].push({
+        subject: n.subject || "",
+        date: n.date || "",
+        text: n.description || "",
+      });
+    }
+    if (shortName !== fullName) {
+      if (!gradesByStudent[shortName] || gradesByStudent[shortName].length === 0) {
+        if (!gradesByStudent[shortName]) gradesByStudent[shortName] = [];
+        gradesByStudent[shortName].push({
+          subject: n.subject || "",
+          date: n.date || "",
+          text: n.description || "",
+        });
+      }
     }
   }
 

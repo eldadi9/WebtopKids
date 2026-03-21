@@ -48,6 +48,10 @@ let cache = { data: null, timestamp: 0 };
 let triggerPending = false;
 let triggerRequestedAt = null;
 
+// ─── Pending cookie (Telegram /cookie command → Windows machine) ──────────────
+let pendingCookie = null;
+let pendingCookieAt = null;
+
 // ─── Homework status persistence ──────────────────────────────────────────────
 function loadStatus() {
   try {
@@ -122,13 +126,27 @@ function notifId(n) {
 // ─── Scraper runner ───────────────────────────────────────────────────────────
 function runScraper() {
   return new Promise((resolve, reject) => {
-    const scraperPath = join(__dirname, 'webtop_scrape.mjs');
-    const env = { ...process.env, WEBTOP_SESSION: join(__dirname, '.webtop_session.json') };
-    const proc = spawn(process.execPath, [scraperPath], { env, cwd: __dirname });
+    // Prefer Python API fetcher if available; fall back to Playwright scraper
+    const pyScript = join(__dirname, 'webtop_api_fetch.py');
+    const jsScript = join(__dirname, 'webtop_scrape.mjs');
+    const usePython = existsSync(pyScript) && process.env.USE_API_FETCHER !== 'false';
+
+    let proc;
+    if (usePython) {
+      const pythonBin = process.env.PYTHON_BIN || 'python';
+      console.log(`[scraper] Using Python API fetcher (${pythonBin})`);
+      proc = spawn(pythonBin, [pyScript], { env: { ...process.env }, cwd: __dirname });
+    } else {
+      console.log('[scraper] Using Playwright scraper (fallback)');
+      const env = { ...process.env, WEBTOP_SESSION: join(__dirname, '.webtop_session.json') };
+      proc = spawn(process.execPath, [jsScript], { env, cwd: __dirname });
+    }
+
     let stdout = '', stderr = '';
     proc.stdout.on('data', d => (stdout += d));
     proc.stderr.on('data', d => (stderr += d));
     proc.on('close', code => {
+      if (stderr.trim()) console.log('[scraper-stderr]', stderr.trim().slice(0, 500));
       if (code !== 0) return reject(new Error(`Scraper exited ${code}: ${stderr.slice(0, 500)}`));
       try { resolve(JSON.parse(stdout.trim())); }
       catch { reject(new Error(`JSON parse failed: ${stdout.slice(0, 300)}`)); }
@@ -138,9 +156,10 @@ function runScraper() {
 
 // ─── Quiet hours — no alerts between 21:00 and 07:00 Israel time ─────────────
 function isQuietHours() {
-  const now = new Date();
-  // Israel is UTC+2 (winter) / UTC+3 (summer) — approximate with +2 offset
-  const israelHour = (now.getUTCHours() + 2) % 24;
+  const israelHour = parseInt(
+    new Date().toLocaleString('he-IL', { hour: 'numeric', hour12: false, timeZone: 'Asia/Jerusalem' }),
+    10
+  );
   return israelHour >= 21 || israelHour < 7; // 21:00–07:00
 }
 
@@ -368,6 +387,10 @@ app.post('/api/push', async (req, res) => {
       return res.status(403).json({ ok: false, error: 'Unauthorized' });
     }
     if (!data) return res.status(400).json({ ok: false, error: 'missing data' });
+    if (data.ok === false) {
+      console.warn('[push] Rejected: scraper returned ok=false:', data.error || '(no error message)');
+      return res.status(400).json({ ok: false, error: 'Scraper failed — cache not updated', scraperError: data.error });
+    }
     const links = data?.data?.usefulLinks || [];
     if (links.some(l => (l.href || '').includes('forgotPassword'))) {
       console.warn('[push] Rejected: data looks like login page (forgotPassword in links)');
@@ -734,10 +757,214 @@ app.get('/api/poll', (req, res) => {
   res.json({ ok: true, pending, requestedAt: triggerRequestedAt });
 });
 
+// POST /api/cookie — store cookie value sent via Telegram /cookie command
+app.post('/api/cookie', (req, res) => {
+  const { secret, cookie } = req.body || {};
+  if (secret !== PUSH_SECRET) return res.status(403).json({ ok: false });
+  if (!cookie || typeof cookie !== 'string' || cookie.length < 10) {
+    return res.status(400).json({ ok: false, error: 'invalid cookie' });
+  }
+  pendingCookie = cookie.trim();
+  pendingCookieAt = new Date().toISOString();
+  console.log(`[cookie] Stored pending cookie (${cookie.length} chars) at ${pendingCookieAt}`);
+  res.json({ ok: true, received: true });
+});
+
+// GET /api/poll-cookie — Windows machine polls; returns cookie and clears it
+app.get('/api/poll-cookie', (req, res) => {
+  const secret = req.query.secret || req.headers['x-push-secret'];
+  if (secret !== PUSH_SECRET) return res.status(403).json({ ok: false });
+  if (!pendingCookie) return res.json({ ok: true, pending: false });
+  const cookie = pendingCookie;
+  pendingCookie = null;
+  console.log('[cookie] Cookie consumed by Windows machine');
+  res.json({ ok: true, pending: true, cookie });
+});
+
+// POST /telegram/webhook — receive Telegram bot messages (/cookie command)
+app.post('/telegram/webhook', async (req, res) => {
+  res.json({ ok: true }); // always respond fast
+  try {
+    const msg = req.body?.message;
+    if (!msg?.text) return;
+    const text = msg.text.trim();
+    const chatId = String(msg.chat?.id || '');
+
+    if (!TELEGRAM_CHAT_ID || chatId !== TELEGRAM_CHAT_ID) {
+      console.warn('[telegram] Ignored message from unknown chat:', chatId);
+      return;
+    }
+
+    if (text.startsWith('/cookie ')) {
+      const cookieValue = text.slice('/cookie '.length).trim();
+      if (cookieValue.length < 10) {
+        await sendTelegram('❌ Cookie קצר מדי — נסה שוב');
+        return;
+      }
+      pendingCookie = cookieValue;
+      pendingCookieAt = new Date().toISOString();
+      console.log(`[cookie] Received via Telegram (${cookieValue.length} chars)`);
+      await sendTelegram('✅ Cookie התקבל! המחשב הביתי יחדש את ה-session תוך ~30 שניות.');
+
+    } else if (text === '/status') {
+      const ageMin = cache.timestamp
+        ? Math.round((Date.now() - cache.timestamp) / 60000)
+        : null;
+      const d = cache.data?.data;
+      const notifCount = d?.notifications?.length ?? 0;
+      const isStale = ageMin !== null && ageMin > 30;
+      const isLoginPage = (d?.usefulLinks || []).some(l => (l.href || '').includes('forgotPassword'));
+      const lines = [
+        isStale ? '⚠️ נתונים ישנים!' : '✅ המערכת פעילה',
+        ageMin !== null ? `🕐 עדכון אחרון: לפני ${ageMin} דקות` : '📭 אין נתונים במטמון',
+        `🔔 התראות: ${notifCount}`,
+        isLoginPage ? '🔴 Session פג — שלח /cookie' : '',
+        triggerPending ? '⏳ Refresh ממתין...' : '',
+      ].filter(Boolean).join('\n');
+      await sendTelegram(lines);
+
+    } else if (text === '/refresh') {
+      if (triggerPending) {
+        await sendTelegram('⏳ Refresh כבר ממתין — המחשב הביתי יטפל בזה בקרוב.');
+        return;
+      }
+      triggerPending = true;
+      triggerRequestedAt = new Date().toISOString();
+      console.log('[telegram] /refresh triggered via Telegram');
+      await sendTelegram('🔄 בקשת Refresh נשלחה! המחשב הביתי יסרוק תוך ~30 שניות.');
+
+    } else if (text === '/logs') {
+      const { execSync } = await import('child_process');
+      let logLines = '';
+      try {
+        logLines = execSync('pm2 logs webtop --lines 15 --nostream 2>&1 | tail -20', { encoding: 'utf8' });
+      } catch { logLines = 'לא ניתן לקרוא לוגים'; }
+      await sendTelegram('📋 לוגים אחרונים:\n' + logLines.slice(0, 3500));
+
+    } else if (text === '/help' || text === '/start') {
+      await sendTelegram([
+        '🤖 <b>Webtop Bot — פקודות זמינות:</b>',
+        '',
+        '/status — סטטוס המערכת',
+        '/refresh — סרוק עכשיו',
+        '/logs — לוגים אחרונים',
+        '/cookie &lt;value&gt; — חדש session',
+        '/help — הצג עזרה זו',
+      ].join('\n'));
+
+    } else {
+      await sendTelegram(`❓ פקודה לא מוכרת: <code>${text}</code>\nשלח /help לרשימת הפקודות.`);
+    }
+  } catch (e) {
+    console.error('[telegram/webhook] Error:', e.message);
+  }
+});
+
 // Fallback → index.html
 app.get('*', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'index.html'));
 });
+
+// ─── Telegram polling (replaces webhook — works without HTTPS) ────────────────
+async function handleTelegramMessage(msg) {
+  if (!msg?.text) return;
+  const text = msg.text.trim();
+  const chatId = String(msg.chat?.id || '');
+  if (!TELEGRAM_CHAT_ID || chatId !== TELEGRAM_CHAT_ID) {
+    console.warn('[telegram] Ignored message from unknown chat:', chatId);
+    return;
+  }
+  // Reuse the same handler logic via a fake Express req/res
+  const fakeReq = { body: { message: msg } };
+  const fakeRes = { json: () => {} };
+  // Inline command dispatch (mirrors webhook handler)
+  try {
+    if (text.startsWith('/cookie ')) {
+      const cookieValue = text.slice('/cookie '.length).trim();
+      if (cookieValue.length < 10) { await sendTelegram('❌ Cookie קצר מדי — נסה שוב'); return; }
+      pendingCookie = cookieValue;
+      pendingCookieAt = new Date().toISOString();
+      console.log(`[cookie] Received via Telegram polling (${cookieValue.length} chars)`);
+      await sendTelegram('✅ Cookie התקבל! המחשב הביתי יחדש את ה-session תוך ~30 שניות.');
+    } else if (text === '/status') {
+      const ageMin = cache.timestamp ? Math.round((Date.now() - cache.timestamp) / 60000) : null;
+      const d = cache.data?.data;
+      const notifCount = d?.notifications?.length ?? 0;
+      const isLoginPage = (d?.usefulLinks || []).some(l => (l.href || '').includes('forgotPassword'));
+      const lines = [
+        (ageMin !== null && ageMin > 30) ? '⚠️ נתונים ישנים!' : '✅ המערכת פעילה',
+        ageMin !== null ? `🕐 עדכון אחרון: לפני ${ageMin} דקות` : '📭 אין נתונים במטמון',
+        `🔔 התראות: ${notifCount}`,
+        isLoginPage ? '🔴 Session פג — שלח /cookie' : '',
+        triggerPending ? '⏳ Refresh ממתין...' : '',
+      ].filter(Boolean).join('\n');
+      await sendTelegram(lines);
+    } else if (text === '/refresh') {
+      if (triggerPending) { await sendTelegram('⏳ Refresh כבר ממתין — המחשב הביתי יטפל בזה בקרוב.'); return; }
+      triggerPending = true;
+      triggerRequestedAt = new Date().toISOString();
+      console.log('[telegram] /refresh triggered via Telegram polling');
+      await sendTelegram('🔄 בקשת Refresh נשלחה! המחשב הביתי יסרוק תוך ~30 שניות.');
+    } else if (text === '/logs') {
+      const { execSync } = await import('child_process');
+      let logLines = '';
+      try { logLines = execSync('pm2 logs webtop --lines 15 --nostream 2>&1 | tail -20', { encoding: 'utf8' }); }
+      catch { logLines = 'לא ניתן לקרוא לוגים'; }
+      await sendTelegram('📋 לוגים אחרונים:\n' + logLines.slice(0, 3500));
+    } else if (text === '/help' || text === '/start') {
+      await sendTelegram([
+        '🤖 <b>Webtop Bot — פקודות זמינות:</b>',
+        '',
+        '/status — סטטוס המערכת',
+        '/refresh — סרוק עכשיו',
+        '/logs — לוגים אחרונים',
+        '/cookie &lt;value&gt; — חדש session',
+        '/help — הצג עזרה זו',
+      ].join('\n'));
+    } else {
+      await sendTelegram(`❓ פקודה לא מוכרת: <code>${text}</code>\nשלח /help לרשימת הפקודות.`);
+    }
+  } catch (e) {
+    console.error('[telegram/poll] Error handling command:', e.message);
+  }
+}
+
+let tgOffset = 0;
+let tgPolling = false;
+async function pollTelegram() {
+  if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) return;
+  if (tgPolling) return; // prevent concurrent polls
+  tgPolling = true;
+  try {
+    const res = await fetch(
+      `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${tgOffset}&timeout=25&limit=10`
+    );
+    if (!res.ok) {
+      console.error('[telegram] getUpdates failed:', res.status);
+      if (res.status === 409) {
+        // Another instance is polling — wait 30s for it to time out
+        console.warn('[telegram] 409 Conflict — waiting 30s for old connection to expire');
+        await new Promise(r => setTimeout(r, 30000));
+      } else {
+        await new Promise(r => setTimeout(r, 5000));
+      }
+    } else {
+      const json = await res.json();
+      if (json.ok && json.result?.length) {
+        for (const update of json.result) {
+          tgOffset = update.update_id + 1;
+          await handleTelegramMessage(update.message);
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[telegram] poll error:', e.message);
+    await new Promise(r => setTimeout(r, 5000));
+  }
+  tgPolling = false;
+  // Schedule next poll (100ms gap to avoid tight loop)
+  setTimeout(pollTelegram, 100);
+}
 
 // ─── Startup ──────────────────────────────────────────────────────────────────
 loadCacheFromFile();
@@ -745,4 +972,8 @@ app.listen(PORT, () => {
   console.log(`Webtop dashboard running on http://localhost:${PORT}`);
   startDeadlineReminders();
   startLocalScraper();
+  if (TELEGRAM_TOKEN && TELEGRAM_CHAT_ID) {
+    pollTelegram();
+    console.log('[telegram] Polling started — bot ready');
+  }
 });
