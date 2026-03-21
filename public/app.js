@@ -55,6 +55,7 @@ const TYPE_LABEL = {
   missing_equipment: '🎒 ציוד חסר',
   late:              '⏰ איחור',
   absence:           '🚫 חיסור',
+  attendance:        '✅ נוכחות',
   grade:             '🏅 ציון',
   good_word:         '🌟 מילה טובה',
   general:           '📋 כללי',
@@ -620,7 +621,18 @@ function renderHomework(notifications, status) {
   if (done.length) {
     html += `
       <button class="btn-hw-history" onclick="openHomeworkHistory()">
-        📋 היסטוריה — ${done.length} שיעורי בית הושלמו
+        ✅ הושלמו — ${done.length} שיעורי בית
+      </button>`;
+  }
+
+  // Full API history button
+  const allHwByStudent = lastData?.data?.homeworkByStudent || {};
+  const studentHwHistory = currentStudent ? (allHwByStudent[currentStudent] || []) : Object.values(allHwByStudent).flat();
+  const historyItems = studentHwHistory.filter(h => h.source === 'history');
+  if (historyItems.length) {
+    html += `
+      <button class="btn-hw-history" style="background:rgba(99,102,241,.12);border-color:rgba(99,102,241,.4);color:#818cf8;margin-top:0.5rem;" onclick="openAllHomeworkHistory()">
+        📋 היסטוריה מלאה — ${historyItems.length} שיעורי בית
       </button>`;
   }
 
@@ -684,7 +696,7 @@ function hwCard(n, id, done) {
    SECTION: התראות (איחורים / ציוד חסר / חיסורים / אי הכנה)
    ═══════════════════════════════════════════════════════════════ */
 function renderAlerts(notifications) {
-  const ALERT_TYPES = ['good_word', 'late', 'missing_equipment', 'absence', 'homework_not_done'];
+  const ALERT_TYPES = ['good_word', 'late', 'missing_equipment', 'absence', 'homework_not_done', 'attendance'];
   const items = notifications.filter(n => ALERT_TYPES.includes(n.type) && isValidNotification(n));
   const container = document.getElementById('alerts-list');
   if (!container) return;
@@ -701,6 +713,7 @@ function renderAlerts(notifications) {
     missing_equipment: '🎒 ציוד חסר',
     absence:           '🚫 חיסורים',
     homework_not_done: '⚠️ אי הכנת שיעורי בית',
+    attendance:        '✅ נוכחות',
   };
 
   let html = '';
@@ -725,7 +738,7 @@ function alertCard(n) {
     ? fixSpacingForDisplay(n.description).slice(0, 100) + (n.description.length > 100 ? '...' : '')
     : '';
 
-  const iconMap = { good_word: '❤️', late: '⏰', missing_equipment: '⚠️', absence: '🚫', homework_not_done: '⚠️' };
+  const iconMap = { good_word: '❤️', late: '⏰', missing_equipment: '⚠️', absence: '🚫', homework_not_done: '⚠️', attendance: '✅' };
   const icon = iconMap[n.type] || '📋';
   return `
     <div class="card type-${n.type || 'general'} clickable-card"
@@ -1103,6 +1116,7 @@ function renderApprovals() {
 function renderMessages() {
   const container = document.getElementById('messages-list');
   if (!container) return;
+  _selectedMsgIds.clear();
 
   const messages = lastData?.data?.messages;
 
@@ -1136,7 +1150,13 @@ function renderMessages() {
   const unread = sorted.filter(m => !isRead(m));
   const read   = sorted.filter(m =>  isRead(m));
 
-  let html = '';
+  let html = `
+    <div id="msg-bulk-toolbar" class="msg-bulk-toolbar" style="display:none;">
+      <span id="msg-bulk-count">0 נבחרו</span>
+      <button onclick="bulkMarkMessages(true)">✓ סמן כנקרא</button>
+      <button onclick="bulkMarkMessages(false)">✕ סמן כלא נקרא</button>
+      <button onclick="clearMsgSelection()">ביטול</button>
+    </div>`;
   if (unread.length) {
     html += `<h3 class="group-title">📨 הודעות חדשות (${unread.length})</h3>`;
     html += unread.map(msgCard).join('');
@@ -1180,10 +1200,15 @@ function msgCard(m) {
     ? esc(m.body.slice(0, 120)) + (m.body.length > 120 ? '...' : '')
     : '';
 
+  const mid = msgId(m);
   return `
     <div class="card type-message${!readStatus ? ' msg-unread-card' : ''} clickable-card"
-         data-card-idx="${idx}" data-hw-id="" data-msg-id="${esc(msgId(m))}">
+         data-card-idx="${idx}" data-hw-id="" data-msg-id="${esc(mid)}">
       <div class="card-header">
+        <label class="msg-checkbox-wrap" onclick="event.stopPropagation()">
+          <input type="checkbox" class="msg-checkbox" data-msg-id="${esc(mid)}"
+                 onchange="toggleMsgSelect(this)">
+        </label>
         <span class="card-title">${esc(cardObj.subject)}</span>
         ${!readStatus
           ? '<span class="badge badge-message">📨 חדש</span>'
@@ -1531,6 +1556,51 @@ function openHomeworkHistory() {
   document.body.style.overflow = 'hidden';
 }
 
+/* ─── Full homework history modal (from API) ────────────────────────────── */
+function openAllHomeworkHistory() {
+  const allHwByStudent = lastData?.data?.homeworkByStudent || {};
+  const studentItems = currentStudent ? (allHwByStudent[currentStudent] || []) : Object.values(allHwByStudent).flat();
+  const items = studentItems
+    .filter(h => h.source === 'history')
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+  const modal   = document.getElementById('detail-modal');
+  const content = document.getElementById('modal-content');
+  if (!modal || !content) return;
+
+  const cardsHtml = items.map(h => {
+    const meta = [
+      h.date,
+      h.lesson ? `שיעור ${h.lesson}` : null,
+      h.teacher || null,
+    ].filter(Boolean).join(' | ');
+    return `
+      <div class="card type-homework history-done-card">
+        <div class="card-header">
+          <div class="card-title-row">
+            <span class="card-title">${esc(h.subject || '?')}</span>
+            ${currentStudent ? '' : `<span class="badge" style="font-size:0.62rem;opacity:.8;">${esc(h.student || '')}</span>`}
+          </div>
+        </div>
+        <div class="card-meta">${esc(meta)}</div>
+        ${h.text ? `<div class="hw-text">📝 ${esc(h.text)}</div>` : ''}
+      </div>`;
+  }).join('');
+
+  content.innerHTML = `
+    <div class="modal-header-row">
+      <span class="badge badge-homework badge-lg">📋 היסטוריית שיעורי בית</span>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-title">שיעורי בית — היסטוריה מלאה</div>
+    <p style="font-size:0.82rem;color:#64748b;margin:0 0 1rem 0;">${items.length} פריטים</p>
+    ${cardsHtml || '<div class="empty" data-icon="📭">אין היסטוריה</div>'}
+  `;
+
+  modal.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
+
 /* ─── Event delegation: card click → open modal ────────────────────────── */
 document.addEventListener('click', e => {
   // Approval button
@@ -1541,7 +1611,7 @@ document.addEventListener('click', e => {
     if (id) markApprovalDone(id, url);
     return;
   }
-  if (e.target.closest('.btn-done, .modal-close, .child-select, #btn-refresh, .btn-retry, .btn-hw-history')) return;
+  if (e.target.closest('.btn-done, .modal-close, .child-select, #btn-refresh, .btn-retry, .btn-hw-history, .msg-checkbox-wrap, .msg-bulk-toolbar')) return;
 
   // Close modal when clicking backdrop
   if (e.target.id === 'detail-modal') { closeModal(); return; }
@@ -1601,6 +1671,50 @@ async function markMessageRead(id) {
       rerender();
     }
   } catch (e) { console.warn('markMessageRead:', e); }
+}
+
+/* ─── Bulk message selection ─────────────────────────────────────────────── */
+const _selectedMsgIds = new Set();
+
+function toggleMsgSelect(checkbox) {
+  const id = checkbox.dataset.msgId;
+  if (checkbox.checked) _selectedMsgIds.add(id);
+  else _selectedMsgIds.delete(id);
+  _updateBulkToolbar();
+}
+
+function _updateBulkToolbar() {
+  const toolbar = document.getElementById('msg-bulk-toolbar');
+  const countEl = document.getElementById('msg-bulk-count');
+  if (!toolbar) return;
+  if (_selectedMsgIds.size > 0) {
+    toolbar.style.display = 'flex';
+    if (countEl) countEl.textContent = `${_selectedMsgIds.size} נבחרו`;
+  } else {
+    toolbar.style.display = 'none';
+  }
+}
+
+async function bulkMarkMessages(asRead) {
+  const ids = [..._selectedMsgIds];
+  for (const id of ids) {
+    try {
+      const res = await fetch('/api/messages/read', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, read: asRead }),
+      });
+      const j = await res.json();
+      if (j.ok) lastStatus[id] = { read: asRead };
+    } catch (e) { console.warn('bulkMarkMessages:', e); }
+  }
+  _selectedMsgIds.clear();
+  rerender();
+}
+
+function clearMsgSelection() {
+  _selectedMsgIds.clear();
+  document.querySelectorAll('.msg-checkbox:checked').forEach(cb => { cb.checked = false; });
+  _updateBulkToolbar();
 }
 
 async function markApprovalDone(id, webtopUrl) {

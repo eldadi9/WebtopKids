@@ -188,6 +188,7 @@ const ALERT_EMOJI = {
   homework_not_done: '📚',
   homework:          '📚',
   good_word:         '🌟',
+  attendance:        '✅',
 };
 const ALERT_NAME = {
   late:              'איחור',
@@ -197,9 +198,10 @@ const ALERT_NAME = {
   homework_not_done: 'שיעורי בית לא הוכנו',
   homework:          'שיעורי בית חדשים',
   good_word:         'מילה טובה',
+  attendance:        'נוכחות',
 };
 const ALERT_TYPES_SET = new Set([
-  'late', 'absence', 'missing_equipment', 'grade', 'homework_not_done', 'homework', 'good_word',
+  'late', 'absence', 'missing_equipment', 'grade', 'homework_not_done', 'homework', 'good_word', 'attendance',
 ]);
 
 async function sendNewAlerts(newNotifications, prevIds) {
@@ -305,10 +307,27 @@ async function checkDeadlines() {
     if (!dd || !mm || !yyyy) continue;
     const hwDate  = new Date(yyyy, mm - 1, dd);
     const daysLeft = (hwDate - now) / (1000 * 60 * 60 * 24);
-    if (daysLeft <= 0) continue; // past due, skip
+    if (daysLeft < 0) continue; // past due, skip
+
+    // ── Tier 0d: on the due date itself ───────────────────────────────────────
+    if (daysLeft >= 0 && daysLeft < 1 && !sentReminders.has(`${id}_0d`)) {
+      sentReminders.add(`${id}_0d`);
+      saveSentReminders();
+      await sendTelegram([
+        `🔴 <b>היום יום ההגשה!</b>`,
+        ``,
+        `⏳ <b>הגשה היום!</b>`,
+        ``,
+        `📚 מקצוע: <b>${n.subject || '?'}</b>`,
+        `👧 תלמיד/ה: <b>${n.student || '?'}</b>`,
+        `📅 מועד הגשה: ${n.date}`,
+        n.homeworkText ? `📝 מטלה: ${n.homeworkText}` : '',
+      ].filter(Boolean).join('\n'));
+      console.log(`[deadline] Sent 0d reminder (היום יום ההגשה): ${n.subject} / ${n.student}`);
+    }
 
     // ── Tier 2d: 2 days before due date ───────────────────────────────────────
-    if (daysLeft >= 2 && daysLeft < 3 && !sentReminders.has(`${id}_2d`)) {
+    else if (daysLeft >= 2 && daysLeft < 3 && !sentReminders.has(`${id}_2d`)) {
       sentReminders.add(`${id}_2d`);
       saveSentReminders();
       await sendTelegram([
@@ -714,14 +733,18 @@ app.post('/api/approval/done', (req, res) => {
   res.json({ ok: true, id, approved: true });
 });
 
-// POST /api/messages/read — mark message as read when user opens it
+// POST /api/messages/read — mark message as read/unread
 app.post('/api/messages/read', (req, res) => {
-  const { id } = req.body || {};
+  const { id, read = true } = req.body || {};
   if (!id) return res.status(400).json({ ok: false, error: 'missing id' });
   const status = loadStatus();
-  status[id] = { read: true, at: new Date().toISOString() };
+  if (read) {
+    status[id] = { read: true, at: new Date().toISOString() };
+  } else {
+    delete status[id];
+  }
   saveStatus(status);
-  res.json({ ok: true, id, read: true });
+  res.json({ ok: true, id, read: !!read });
 });
 
 // POST /api/homework/undone — unmark (re-enables future reminders)
