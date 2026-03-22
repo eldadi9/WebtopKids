@@ -1,19 +1,23 @@
 #!/usr/bin/env node
 /**
- * webtop_keepalive.mjs — Session Keep-Alive Daemon
+ * webtop_session_recovery_manual.mjs — חירום: שחזור Session ידני בלבד
  *
- * Keeps the Webtop browser session alive by pinging the dashboard every 8 minutes.
- * This prevents the server-side session from expiring due to inactivity.
+ * ⚠️  לא מיועד להרצה אוטומטית. לא מופעל על ידי start_daemon.bat, watchdog.bat, או כל scheduler.
  *
- * Architecture:
- *   - Maintains ONE persistent Playwright browser context (same .webtop_profile/ as scraper)
- *   - Uses playwright-extra + stealth plugin to avoid bot-detection
- *   - Pings dashboard every KEEPALIVE_INTERVAL minutes (default: 8)
- *   - If session expires: auto-login (CapSolver or manual CAPTCHA in headed browser)
- *   - push_loop.mjs continues to run independently for data scraping
+ * מתי להשתמש:
+ *   רק כאשר ה-webToken ב-.webtop_session.json פג לחלוטין ו-webtop_api_fetch.py
+ *   לא מצליח לאמת — כלומר כל הסריקות נכשלות גם אחרי cookie recovery רגיל.
  *
- * Usage:
- *   node webtop_keepalive.mjs
+ * המסלול הפעיל הרגיל הוא:
+ *   push_loop.mjs  +  webtop_api_fetch.py  (ללא דפדפן, ללא keepalive)
+ *
+ * הרצה ידנית בחירום בלבד:
+ *   node webtop_session_recovery_manual.mjs
+ *
+ * מה הוא עושה:
+ *   - פותח Chrome (headed/headless לפי CAPSOLVER_KEY)
+ *   - מתחבר ל-Webtop ומחדש את session cookies ב-.webtop_profile/
+ *   - לאחר הצלחה — יש לעצור אותו ידנית (Ctrl+C); push_loop ימשיך מעצמו
  */
 
 import { readFileSync, existsSync, writeFileSync } from 'fs';

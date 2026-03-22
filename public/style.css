@@ -1922,3 +1922,82 @@ body.theme-dark .chip-trend-down { background: rgba(16,185,129,0.12);   color: #
   transition: background 0.15s;
 }
 .btn-crop-confirm:hover { background: #2563eb; }
+
+/* ── Schedule tab ──────────────────────────────────────────────────────── */
+.schedule-card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+.schedule-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--card-border);
+}
+.schedule-student-name {
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+.schedule-week-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.schedule-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.5rem;
+}
+.schedule-day {
+  background: rgba(99,102,241,0.07);
+  border-radius: 10px;
+  padding: 0.5rem;
+  border: 1px solid rgba(99,102,241,0.15);
+}
+.schedule-today {
+  background: rgba(99,102,241,0.18);
+  border-color: rgba(99,102,241,0.4);
+}
+.schedule-day-header {
+  font-weight: 700;
+  font-size: 0.82rem;
+  color: var(--accent);
+  margin-bottom: 0.4rem;
+  text-align: center;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid rgba(99,102,241,0.2);
+}
+.schedule-lessons { display: flex; flex-direction: column; gap: 0.25rem; }
+.schedule-lesson {
+  display: flex;
+  flex-direction: column;
+  padding: 0.2rem 0.3rem;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.04);
+  font-size: 0.76rem;
+}
+.lesson-num {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+.lesson-subject {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.lesson-teacher, .lesson-room, .lesson-time {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+.schedule-raw {
+  font-size: 0.7rem;
+  overflow: auto;
+  max-height: 300px;
+  color: var(--text-muted);
+  direction: ltr;
+  text-align: left;
+}

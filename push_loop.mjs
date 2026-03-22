@@ -121,7 +121,7 @@ if (!VPS_URL || VPS_URL.includes('your-')) {
 
 // ─── Single-instance lock (prevents duplicate Telegram alerts) ────────────────
 const LOCK_FILE     = join(__dirname, '.push_loop.lock');
-const SCRAPING_LOCK = join(__dirname, '.scraping_lock'); // signals webtop_keepalive to yield profile
+const SCRAPING_LOCK = join(__dirname, '.scraping_lock'); // legacy lock file — no longer used (keepalive removed)
 if (existsSync(LOCK_FILE)) {
   const lockPid = readFileSync(LOCK_FILE, 'utf8').trim();
   // Check if the PID from lock file is still alive

@@ -50,10 +50,35 @@
 - `.\deploy.ps1` — העלאת קוד דרך SSH (או `-NoPrompt` לריצה ללא שאלות)
 - **תהליך מלא:** `.\run_all.ps1` או `.\run_all.ps1 -NoPrompt`
 
-## משיכת נתונים (מחשב בית)
+## המסלול הפעיל — מחשב הבית
 
-- `node scrape_and_push.mjs` — סריקה חדשה + דחיפה ל-VPS
-- `node push_loop.mjs` — לולאה שמושכת כל X דקות ודוחפת
+**הרצה יחידה ותקינה:**
+
+```bat
+start_daemon.bat  →  push_loop.mjs  +  webtop_api_fetch.py
+```
+
+- `push_loop.mjs` — לולאה כל 15 דקות, מריץ את Python fetcher, דוחף ל-VPS
+- `webtop_api_fetch.py` — מושך נתונים דרך REST API עם webToken שמור (ללא דפדפן)
+- `watchdog.bat` — מופעל דרך Task Scheduler, מאתחל את push_loop אם קרס
+
+⚠️ **ללא Playwright. ללא keepalive. ללא דפדפן פתוח ברקע.**
+
+### שחזור Session בחירום בלבד
+
+אם webToken פג לחלוטין וה-API מחזיר שגיאת auth:
+
+```bat
+node webtop_session_recovery_manual.mjs
+```
+
+**לא** להריץ אוטומטית — חירום ידני בלבד. לאחר שחזור, עוצרים ידנית (Ctrl+C).
+
+---
+
+## משיכת נתונים — כלים נוספים
+
+- `node scrape_and_push.mjs` — סריקה חד-פעמית + דחיפה ל-VPS
 
 ## סריקת/ניתוח האתר
 

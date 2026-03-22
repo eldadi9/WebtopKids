@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=27" />
+  <link rel="stylesheet" href="style.css?v=28" />
 </head>
 <body>
 
@@ -97,6 +97,7 @@
       <button class="stab"        data-section="calendar"  id="tab-calendar">📅 יומן</button>
       <button class="stab"        data-section="approvals" id="tab-approvals">✍️ אישורים</button>
       <button class="stab"        data-section="messages"  id="tab-messages">📨 הודעות</button>
+      <button class="stab"        data-section="schedule"  id="tab-schedule">📅 מערכת שעות</button>
       <button class="stab"        data-section="feed"      id="tab-feed">📬 הכל</button>
       <button class="stab"        data-section="external"  id="tab-external">🔗 אתרים חיצוניים</button>
     </nav>
@@ -155,6 +156,13 @@
     </div>
   </section>
 
+  <!-- ══ SECTION: מערכת שעות ══ -->
+  <section id="section-schedule" class="page-section hidden">
+    <div class="single-col">
+      <div id="schedule-list" class="card-list"></div>
+    </div>
+  </section>
+
   <!-- ══ SECTION: הכל (פיד מלא) ══ -->
   <section id="section-feed" class="page-section hidden">
     <div class="single-col">
@@ -195,7 +203,7 @@
     </div>
   </div>
 
-  <script src="app.js?v=16"></script>
+  <script src="app.js?v=17"></script>
   <script>
     window.onerror = function(msg, url, line, col, err) {
       console.error('App error:', msg, 'at', line + ':' + col, err);
