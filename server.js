@@ -4,8 +4,8 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { runWebtopScraperChild } from './webtop_scraper_child.mjs';
 import { config as dotenvConfig } from 'dotenv';
-import { checkPassword, signJwt, requireAuth, encryptToken } from './auth.mjs';
-import { loadUsers, findUserById, findUserByPhone, updateUser } from './users.mjs';
+import { checkPassword, signJwt, requireAuth, requireAdmin, encryptToken } from './auth.mjs';
+import { loadUsers, findUserById, findUserByPhone, findUserByChatId, updateUser } from './users.mjs';
 dotenvConfig();
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -172,17 +172,21 @@ function isQuietHours() {
 }
 
 // ─── Telegram ─────────────────────────────────────────────────────────────────
-async function sendTelegram(text) {
-  if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) return;
+async function sendTelegram(text, chatId = TELEGRAM_CHAT_ID) {
+  if (!TELEGRAM_TOKEN || !chatId) return;
   try {
     await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text, parse_mode: 'HTML' }),
+      body:    JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
     });
   } catch (e) {
     console.error('Telegram error:', e.message);
   }
+}
+
+async function sendAdminTelegram(text) {
+  return sendTelegram(text, TELEGRAM_CHAT_ID);
 }
 
 // ─── New-alert Telegram sender ────────────────────────────────────────────────
@@ -885,7 +889,16 @@ app.post('/telegram/webhook', async (req, res) => {
       } catch { logLines = 'לא ניתן לקרוא לוגים'; }
       await sendTelegram('📋 לוגים אחרונים:\n' + logLines.slice(0, 3500));
 
-    } else if (text === '/help' || text === '/start') {
+    } else if (text === '/start') {
+      const existingUser = findUserByChatId(chatId);
+      if (existingUser) {
+        await sendTelegram(`שלום ${existingUser.name}! 👋 התראות מחוברות.`, chatId);
+      } else {
+        await sendAdminTelegram(`📱 ${chatId} שלח /start — יש לשייך למשתמש`);
+        await sendTelegram('ברוך הבא! המנהל ישייך אותך בקרוב.', chatId);
+      }
+
+    } else if (text === '/help') {
       await sendTelegram([
         '🤖 <b>Webtop Bot — פקודות זמינות:</b>',
         '',
@@ -952,6 +965,43 @@ app.post('/api/token-submit', async (req, res) => {
   res.json({ message: 'Token התקבל! ממתין לאישור המנהל.' });
 });
 
+// GET /admin — serve admin dashboard
+app.get('/admin', requireAdmin, (req, res) => {
+  res.sendFile(join(__dirname, 'public', 'admin.html'));
+});
+
+// GET /api/admin/users
+app.get('/api/admin/users', requireAdmin, (req, res) => {
+  const users = loadUsers().map(u => ({
+    id: u.id, name: u.name, phone: u.phone,
+    status: u.status, lastLogin: u.lastLogin,
+    lastLoginIp: u.lastLoginIp, loginCount: u.loginCount,
+    chatId: u.chatId, tokenUpdatedAt: u.webTokenUpdatedAt,
+    hasPendingToken: !!u.tokenPendingApproval
+  }));
+  res.json(users);
+});
+
+// POST /api/admin/users/:id/approve-token
+app.post('/api/admin/users/:id/approve-token', requireAdmin, async (req, res) => {
+  const user = findUserById(req.params.id);
+  if (!user?.tokenPendingApproval) return res.status(400).json({ error: 'No pending token' });
+  updateUser(user.id, {
+    webTokenEncrypted: user.tokenPendingApproval,
+    webTokenUpdatedAt: new Date().toISOString(),
+    tokenPendingApproval: null,
+    status: 'active'
+  });
+  if (user.chatId) await sendTelegram('✅ חשבונך חובר! אפשר להיכנס לאפליקציה.', user.chatId);
+  res.json({ ok: true });
+});
+
+// POST /api/admin/users/:id/disable
+app.post('/api/admin/users/:id/disable', requireAdmin, (req, res) => {
+  updateUser(req.params.id, { status: 'disabled' });
+  res.json({ ok: true });
+});
+
 // Fallback → index.html
 app.get('*', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'index.html'));
@@ -962,13 +1012,27 @@ async function handleTelegramMessage(msg) {
   if (!msg?.text) return;
   const text = msg.text.trim();
   const chatId = String(msg.chat?.id || '');
+
+  // Allow /start from any chat — handle before admin-only guard
+  if (text === '/start') {
+    try {
+      const existingUser = findUserByChatId(chatId);
+      if (existingUser) {
+        await sendTelegram(`שלום ${existingUser.name}! 👋 התראות מחוברות.`, chatId);
+      } else {
+        await sendAdminTelegram(`📱 ${chatId} שלח /start — יש לשייך למשתמש`);
+        await sendTelegram('ברוך הבא! המנהל ישייך אותך בקרוב.', chatId);
+      }
+    } catch (e) {
+      console.error('[telegram/poll] /start error:', e.message);
+    }
+    return;
+  }
+
   if (!TELEGRAM_CHAT_ID || chatId !== TELEGRAM_CHAT_ID) {
     console.warn('[telegram] Ignored message from unknown chat:', chatId);
     return;
   }
-  // Reuse the same handler logic via a fake Express req/res
-  const fakeReq = { body: { message: msg } };
-  const fakeRes = { json: () => {} };
   // Inline command dispatch (mirrors webhook handler)
   try {
     if (text.startsWith('/cookie ')) {
@@ -1003,7 +1067,7 @@ async function handleTelegramMessage(msg) {
       try { logLines = execSync('pm2 logs webtop --lines 15 --nostream 2>&1 | tail -20', { encoding: 'utf8' }); }
       catch { logLines = 'לא ניתן לקרוא לוגים'; }
       await sendTelegram('📋 לוגים אחרונים:\n' + logLines.slice(0, 3500));
-    } else if (text === '/help' || text === '/start') {
+    } else if (text === '/help') {
       await sendTelegram([
         '🤖 <b>Webtop Bot — פקודות זמינות:</b>',
         '',
