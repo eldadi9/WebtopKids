@@ -133,6 +133,19 @@ function saveSentReminders() {
 
 const sentReminders = loadSentReminders(); // ← persisted across restarts
 
+// ─── Per-user sent-reminders (dedup keys per user — avoids cross-user suppression) ─
+function loadUserReminders(userId) {
+  try {
+    const file = join(__dirname, `sent_reminders_${userId}.json`);
+    if (existsSync(file)) return new Set(JSON.parse(readFileSync(file, 'utf8')));
+  } catch {}
+  return new Set();
+}
+function saveUserReminders(userId, set) {
+  try { writeFileSync(join(__dirname, `sent_reminders_${userId}.json`), JSON.stringify([...set])); }
+  catch {}
+}
+
 // ─── ID helpers ───────────────────────────────────────────────────────────────
 // Include student in hwId to avoid collision between Ami and Yuli same-subject homework
 function hwId(n) { return `${(n.student || '').trim()}_${(n.subject || '').trim()}_${(n.date || '').trim()}_${(n.lesson || '').toString().trim()}`; }
@@ -199,7 +212,7 @@ const ALERT_TYPES_SET = new Set([
   'late', 'absence', 'missing_equipment', 'grade', 'homework_not_done', 'homework', 'good_word', 'attendance',
 ]);
 
-async function sendNewAlerts(newNotifications, prevIds, sendFn = sendTelegram) {
+async function sendNewAlerts(newNotifications, prevIds, sendFn = sendTelegram, reminders = sentReminders, saveReminders = saveSentReminders) {
   if (isQuietHours()) {
     console.log('[alert] Quiet hours (21:00–07:00) — skipping instant alerts');
     return;
@@ -211,7 +224,7 @@ async function sendNewAlerts(newNotifications, prevIds, sendFn = sendTelegram) {
     const nId = notifId(n);
 
     // PERMANENT dedup: already sent this alert before (persists across restarts)
-    if (sentReminders.has(`alert_${nId}`)) continue;
+    if (reminders.has(`alert_${nId}`)) continue;
 
     // Session dedup: already in previous cache batch
     if (prevIds.has(nId)) continue;
@@ -221,7 +234,7 @@ async function sendNewAlerts(newNotifications, prevIds, sendFn = sendTelegram) {
       const alertH = parseInt(n.alertTime.split(':')[0], 10);
       if (!isNaN(alertH) && alertH < 7) {
         console.log(`[alert] Skipped impossible absence at ${n.alertTime} — ${n.student}/${n.date}`);
-        sentReminders.add(`alert_${nId}`); saveSentReminders(); // mark so it never retries
+        reminders.add(`alert_${nId}`); saveReminders(); // mark so it never retries
         continue;
       }
     }
@@ -233,13 +246,13 @@ async function sendNewAlerts(newNotifications, prevIds, sendFn = sendTelegram) {
         const daysOld = Math.round((Date.now() - nDate.getTime()) / (1000 * 60 * 60 * 24));
         if (daysOld > 7) {
           console.log(`[alert] Skipped stale alert (${daysOld}d old) — ${n.type} / ${n.subject}`);
-          sentReminders.add(`alert_${nId}`); saveSentReminders();
+          reminders.add(`alert_${nId}`); saveReminders();
           continue;
         }
         // Skip homework past due
         if (n.type === 'homework' && daysOld > 0) {
           console.log(`[alert] Skipped past-due homework — ${n.subject} / ${n.date}`);
-          sentReminders.add(`alert_${nId}`); saveSentReminders();
+          reminders.add(`alert_${nId}`); saveReminders();
           continue;
         }
       }
@@ -272,8 +285,8 @@ async function sendNewAlerts(newNotifications, prevIds, sendFn = sendTelegram) {
 
     await sendFn(lines.filter(Boolean).join('\n'));
     // Mark as permanently sent — will NEVER send this alert again
-    sentReminders.add(`alert_${nId}`);
-    saveSentReminders();
+    reminders.add(`alert_${nId}`);
+    saveReminders();
     console.log(`[alert] Sent Telegram for new ${n.type}: ${n.subject} / ${n.student}`);
   }
 }
@@ -284,7 +297,7 @@ async function sendNewAlerts(newNotifications, prevIds, sendFn = sendTelegram) {
 //   Tier 2d (key: id_2d) → 2 days before due  → 🟡 early warning
 //   Tier 1d (key: id_1d) → 1 day before due   → 🟠 "מחר חייבים להגיש"
 // Called both at push time AND every hour.
-async function checkDeadlines(dataOverride = null, sendFn = sendTelegram) {
+async function checkDeadlines(dataOverride = null, sendFn = sendTelegram, reminders = sentReminders, saveReminders = saveSentReminders) {
   const dataSource = dataOverride ?? cache.data;
   if (!dataSource?.data?.notifications) return;
   if (isQuietHours()) {
@@ -306,9 +319,9 @@ async function checkDeadlines(dataOverride = null, sendFn = sendTelegram) {
     if (daysLeft < 0) continue; // past due, skip
 
     // ── Tier 0d: on the due date itself ───────────────────────────────────────
-    if (daysLeft >= 0 && daysLeft < 1 && !sentReminders.has(`${id}_0d`)) {
-      sentReminders.add(`${id}_0d`);
-      saveSentReminders();
+    if (daysLeft >= 0 && daysLeft < 1 && !reminders.has(`${id}_0d`)) {
+      reminders.add(`${id}_0d`);
+      saveReminders();
       await sendFn([
         `🔴 <b>היום יום ההגשה!</b>`,
         ``,
@@ -323,9 +336,9 @@ async function checkDeadlines(dataOverride = null, sendFn = sendTelegram) {
     }
 
     // ── Tier 2d: 2 days before due date ───────────────────────────────────────
-    else if (daysLeft >= 2 && daysLeft < 3 && !sentReminders.has(`${id}_2d`)) {
-      sentReminders.add(`${id}_2d`);
-      saveSentReminders();
+    else if (daysLeft >= 2 && daysLeft < 3 && !reminders.has(`${id}_2d`)) {
+      reminders.add(`${id}_2d`);
+      saveReminders();
       await sendFn([
         `🟡 <b>תזכורת — שיעורי בית</b>`,
         ``,
@@ -338,9 +351,9 @@ async function checkDeadlines(dataOverride = null, sendFn = sendTelegram) {
     }
 
     // ── Tier 1d: 1 day before — "מחר חייבים להגיש" ───────────────────────────
-    else if (daysLeft >= 1 && daysLeft < 2 && !sentReminders.has(`${id}_1d`)) {
-      sentReminders.add(`${id}_1d`);
-      saveSentReminders();
+    else if (daysLeft >= 1 && daysLeft < 2 && !reminders.has(`${id}_1d`)) {
+      reminders.add(`${id}_1d`);
+      saveReminders();
       await sendFn([
         `🟠 <b>תזכורת דחופה — שיעורי בית!</b>`,
         ``,
@@ -420,9 +433,12 @@ async function processAlertsForUser(user, data) {
     const prevCache = loadUserCache(user.id);
     const prevIds = new Set((prevCache?.data?.data?.notifications || []).map(notifId));
 
+    const userReminders = loadUserReminders(user.id);
+    const saveUserRem = () => saveUserReminders(user.id, userReminders);
+
     const newNotifications = data?.data?.notifications || [];
-    await sendNewAlerts(newNotifications, prevIds, sendTelegramToUser);
-    await checkDeadlines(data, sendTelegramToUser);
+    await sendNewAlerts(newNotifications, prevIds, sendTelegramToUser, userReminders, saveUserRem);
+    await checkDeadlines(data, sendTelegramToUser, userReminders, saveUserRem);
 
     const newMessages = data?.data?.messages || [];
     const seenMsgKeys = new Set();
@@ -433,10 +449,10 @@ async function processAlertsForUser(user, data) {
       if (m.read) continue;
       const subjNorm = normSubject(m.subject);
       const msgKey = `msg_|${norm(m.date)}|${subjNorm}`;
-      if (sentReminders.has(msgKey) || seenMsgKeys.has(msgKey)) continue;
-      sentReminders.add(msgKey);
+      if (userReminders.has(msgKey) || seenMsgKeys.has(msgKey)) continue;
+      userReminders.add(msgKey);
       seenMsgKeys.add(msgKey);
-      saveSentReminders();
+      saveUserRem();
       if (quietNow) { console.log(`[messages] Quiet hours — skipped Telegram for "${m.subject}"`); continue; }
       const lines = [
         `📨 <b>הודעה חדשה מהמורה!</b>`,
@@ -461,6 +477,7 @@ app.post('/api/push', async (req, res) => {
   if (secret !== PUSH_SECRET) return res.status(403).json({ error: 'Forbidden' });
   const { userId, data } = req.body;
   if (!userId || !data) return res.status(400).json({ error: 'Missing userId or data' });
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(userId)) return res.status(400).json({ error: 'Invalid userId' });
   saveUserCache(userId, data);
   const user = findUserById(userId);
   if (user?.chatId) processAlertsForUser(user, data);

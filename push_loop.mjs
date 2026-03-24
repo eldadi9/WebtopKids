@@ -159,8 +159,8 @@ function runScraperForUser(userId, webToken) {
   return new Promise((resolve, reject) => {
     const pyScript    = join(__dirname, 'webtop_api_fetch.py');
     const pythonBin   = process.env.PYTHON_BIN || 'python';
-    const args        = [pyScript, '--user-id', userId, '--token', webToken];
-    const proc        = spawn(pythonBin, args, { env: { ...process.env }, cwd: __dirname });
+    const args        = [pyScript, '--user-id', userId];
+    const proc        = spawn(pythonBin, args, { env: { ...process.env, WEBTOP_TOKEN_ARG: webToken }, cwd: __dirname });
 
     let stdout = '';
     let stderr = '';

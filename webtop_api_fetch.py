@@ -63,7 +63,6 @@ _load_env_file()
 import argparse
 _arg_parser = argparse.ArgumentParser()
 _arg_parser.add_argument('--user-id', default=None)
-_arg_parser.add_argument('--token', default=None)
 _cli_args, _ = _arg_parser.parse_known_args()
 
 BASE_URL = os.environ.get("WEBTOP_BASE", "https://webtopserver.smartschool.co.il")
@@ -783,9 +782,10 @@ if __name__ == "__main__":
             sys.exit(0)
 
     try:
-        if _cli_args.token:
-            token = _cli_args.token
-            log(f"Using token from --token arg (user-id={_cli_args.user_id})")
+        _env_token = os.environ.get('WEBTOP_TOKEN_ARG')
+        if _env_token:
+            token = _env_token
+            log(f"Using token from WEBTOP_TOKEN_ARG env (user-id={_cli_args.user_id})")
         else:
             token = obtain_token()
 
