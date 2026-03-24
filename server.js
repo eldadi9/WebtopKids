@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { runWebtopScraperChild } from './webtop_scraper_child.mjs';
 import { config as dotenvConfig } from 'dotenv';
-import { checkPassword, signJwt, requireAuth } from './auth.mjs';
+import { checkPassword, signJwt, requireAuth, encryptToken } from './auth.mjs';
 import { loadUsers, findUserById, findUserByPhone, updateUser } from './users.mjs';
 dotenvConfig();
 
@@ -915,6 +915,24 @@ app.get('/api/auth/me', requireAuth, (req, res) => {
 // Serve login page
 app.get('/login', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'login.html'));
+});
+
+// POST /api/token-submit — bookmarklet sends webToken
+app.post('/api/token-submit', async (req, res) => {
+  const { token, phone } = req.body || {};
+  if (!token || token.length < 20) return res.json({ message: 'Token קצר מדי — ודא שאתה מחובר ל-Webtop' });
+  if (!phone) return res.json({ message: 'נא להזין מספר טלפון' });
+  const user = findUserByPhone(phone);
+  if (!user) {
+    await sendTelegram(`📥 Token חדש מ-${phone} (לא רשום במערכת)\nיש להוסיף הורה זה ולאשר.`);
+    return res.json({ message: 'Token התקבל. המנהל יאשר את חיבורך בקרוב.' });
+  }
+  updateUser(user.id, {
+    tokenPendingApproval: encryptToken(token),
+    tokenSubmittedAt: new Date().toISOString(),
+  });
+  await sendTelegram(`📥 Token חדש מ-${user.name} (${phone})\nממתין לאישורך.`);
+  res.json({ message: 'Token התקבל! ממתין לאישור המנהל.' });
 });
 
 // Fallback → index.html
