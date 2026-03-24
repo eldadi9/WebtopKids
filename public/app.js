@@ -69,7 +69,9 @@ async function fetchAll(forceRefresh = false) {
   showErrorBanner(false);
   try {
     const url = forceRefresh ? '/api/data?refresh=1' : '/api/data';
-    const fetchOpts = { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } };
+    const token = localStorage.getItem('wt_token');
+    if (!token) { location.replace('/login'); return; }
+    const fetchOpts = { cache: 'no-store', headers: { 'Cache-Control': 'no-cache', 'Authorization': 'Bearer ' + token } };
     const results = await Promise.allSettled([
       fetch(url, fetchOpts),
       fetch('/api/status', fetchOpts),
@@ -80,6 +82,7 @@ async function fetchAll(forceRefresh = false) {
       fetch('/api/schedule', fetchOpts),
     ]);
     const dataRes = results[0].status === 'fulfilled' ? results[0].value : null;
+    if (dataRes?.status === 401) { location.replace('/login'); return; }
     const statusRes = results[1].status === 'fulfilled' ? results[1].value : null;
     const eventsRes = results[2].status === 'fulfilled' ? results[2].value : null;
     const childrenRes = results[3].status === 'fulfilled' ? results[3].value : null;

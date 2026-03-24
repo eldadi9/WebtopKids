@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebtopKids — כניסה</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    body { display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; }
+    .login-card { background:var(--surface-1,#1e293b); border-radius:16px; padding:2rem; width:320px; box-shadow:0 4px 24px rgba(0,0,0,0.3); }
+    .login-card h2 { margin:0 0 1.5rem; text-align:center; color:var(--accent,#8B5CF6); }
+    .login-card input { width:100%; box-sizing:border-box; margin:0.4rem 0; padding:0.75rem; border-radius:8px; border:1px solid var(--border,#334155); background:var(--surface-2,#0f172a); color:inherit; font-size:1rem; }
+    .login-card button { width:100%; margin-top:1rem; padding:0.75rem; background:var(--accent,#8B5CF6); color:#fff; border:none; border-radius:8px; cursor:pointer; font-size:1rem; font-weight:600; }
+    .login-card button:hover { opacity:0.9; }
+    .error { color:#f87171; font-size:0.9rem; margin-top:0.75rem; min-height:1.2em; text-align:center; }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <h2>WebtopKids 🎒</h2>
+    <input id="phone" type="tel" placeholder="מספר טלפון" autocomplete="username" />
+    <input id="pass" type="password" placeholder="סיסמה" autocomplete="current-password" />
+    <button onclick="doLogin()">כניסה</button>
+    <div class="error" id="err"></div>
+  </div>
+  <script>
+    if (localStorage.getItem('wt_token')) location.replace('/');
+    async function doLogin() {
+      const phone = document.getElementById('phone').value.trim();
+      const password = document.getElementById('pass').value;
+      document.getElementById('err').textContent = '';
+      try {
+        const r = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone, password })
+        });
+        const d = await r.json();
+        if (!r.ok) { document.getElementById('err').textContent = d.error || 'שגיאה'; return; }
+        localStorage.setItem('wt_token', d.token);
+        localStorage.setItem('wt_name', d.name);
+        location.replace('/');
+      } catch (e) {
+        document.getElementById('err').textContent = 'שגיאת רשת — נסה שוב';
+      }
+    }
+    document.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+  </script>
+</body>
+</html>

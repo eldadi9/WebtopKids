@@ -4,6 +4,8 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { runWebtopScraperChild } from './webtop_scraper_child.mjs';
 import { config as dotenvConfig } from 'dotenv';
+import { checkPassword, signJwt, requireAuth } from './auth.mjs';
+import { loadUsers, findUserById, findUserByPhone, updateUser } from './users.mjs';
 dotenvConfig();
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -452,7 +454,7 @@ app.post('/api/push', async (req, res) => {
 });
 
 // GET /api/data — serve from cache; ?refresh=1 sets trigger for home machine
-app.get('/api/data', (req, res) => {
+app.get('/api/data', requireAuth, (req, res) => {
   if (req.query.refresh === '1') {
     triggerPending = true;
     triggerRequestedAt = new Date().toISOString();
@@ -883,6 +885,36 @@ app.post('/telegram/webhook', async (req, res) => {
   } catch (e) {
     console.error('[telegram/webhook] Error:', e.message);
   }
+});
+
+// POST /api/auth/login
+app.post('/api/auth/login', async (req, res) => {
+  const { phone, password } = req.body || {};
+  if (!phone || !password) return res.status(400).json({ error: 'Missing phone or password' });
+  const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
+  const user = findUserByPhone(phone);
+  if (!user || user.status !== 'active') return res.status(401).json({ error: 'פרטים שגויים' });
+  const ok = await checkPassword(password, user.passwordHash);
+  if (!ok) return res.status(401).json({ error: 'פרטים שגויים' });
+  updateUser(user.id, {
+    lastLogin: new Date().toISOString(),
+    lastLoginIp: ip,
+    loginCount: (user.loginCount || 0) + 1
+  });
+  const token = signJwt({ id: user.id, role: user.role, name: user.name });
+  res.json({ token, name: user.name, role: user.role });
+});
+
+// GET /api/auth/me
+app.get('/api/auth/me', requireAuth, (req, res) => {
+  const user = findUserById(req.user.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  res.json({ id: user.id, name: user.name, role: user.role, children: user.children });
+});
+
+// Serve login page
+app.get('/login', (req, res) => {
+  res.sendFile(join(__dirname, 'public', 'login.html'));
 });
 
 // Fallback → index.html
