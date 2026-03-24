@@ -50,14 +50,20 @@ export function encryptToken(plain) {
 }
 
 export function decryptToken(stored) {
-  const [ivHex, encHex] = stored.split(':');
-  const iv = Buffer.from(ivHex, 'hex');
-  const enc = Buffer.from(encHex, 'hex');
-  const decipher = createDecipheriv('aes-256-cbc', TOKEN_ENC_KEY, iv);
-  return Buffer.concat([decipher.update(enc), decipher.final()]).toString('utf8');
+  try {
+    const [ivHex, encHex] = stored.split(':');
+    if (!ivHex || !encHex) return null;
+    const iv = Buffer.from(ivHex, 'hex');
+    const enc = Buffer.from(encHex, 'hex');
+    const decipher = createDecipheriv('aes-256-cbc', TOKEN_ENC_KEY, iv);
+    return Buffer.concat([decipher.update(enc), decipher.final()]).toString('utf8');
+  } catch {
+    return null;
+  }
 }
 
 // --- Express middleware ---
+// requireAuth must precede requireAdmin in route chains
 export function requireAuth(req, res, next) {
   const header = req.headers['authorization'];
   if (!header || !header.startsWith('Bearer ')) {
@@ -71,8 +77,8 @@ export function requireAuth(req, res, next) {
 }
 
 export function requireAdmin(req, res, next) {
-  if (!req.user || req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
-  next();
+  requireAuth(req, res, () => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+    next();
+  });
 }
