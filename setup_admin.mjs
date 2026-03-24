@@ -22,6 +22,11 @@ if (findUserByPhone(phone)) {
   process.exit(1);
 }
 
-const passwordHash = await hashPassword(password);
-createUser({ name, phone, passwordHash, chatId: chatId || null, role: 'admin', status: 'active', children: [] });
-console.log(`✅ Admin created: ${name} (${phone})`);
+try {
+  const passwordHash = await hashPassword(password);
+  createUser({ name, phone, passwordHash, chatId: chatId || null, role: 'admin', status: 'active', children: [] });
+  console.log(`✅ Admin created: ${name} (${phone})`);
+} catch (err) {
+  console.error('Failed to create admin:', err.message);
+  process.exit(1);
+}
