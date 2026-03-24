@@ -41,3 +41,5 @@ Thumbs.db
 # Editor
 .vscode/
 scrape_output*.json
+users.json
+data_cache_*.json
