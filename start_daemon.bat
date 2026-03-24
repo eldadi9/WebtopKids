@@ -6,6 +6,16 @@ REM אם חוזרים ל-Playwright בלבד: הסר REM מהשורות הבאו
 REM start "WebtopKids Keep-Alive" /MIN cmd /c "node webtop_keepalive.mjs >> keepalive.log 2>&1"
 REM timeout /t 3 /nobreak >nul
 
+REM נקה lock file תקוע אם ה-PID לא קיים יותר
+if exist .push_loop.lock (
+  set /p LOCK_PID=<.push_loop.lock
+  tasklist /FI "PID eq %LOCK_PID%" 2>nul | find "%LOCK_PID%" >nul
+  if errorlevel 1 (
+    echo [startup] Removing stale lock file (PID %LOCK_PID% not running)
+    del .push_loop.lock
+  )
+)
+
 title WebtopKids Push Daemon
 echo =========================================
 echo  WebtopKids Push Daemon
