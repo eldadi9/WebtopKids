@@ -60,6 +60,12 @@ def _load_env_file():
 
 _load_env_file()
 
+import argparse
+_arg_parser = argparse.ArgumentParser()
+_arg_parser.add_argument('--user-id', default=None)
+_arg_parser.add_argument('--token', default=None)
+_cli_args, _ = _arg_parser.parse_known_args()
+
 BASE_URL = os.environ.get("WEBTOP_BASE", "https://webtopserver.smartschool.co.il")
 USER = os.environ.get("WEBTOP_USER", "")
 PASS = os.environ.get("WEBTOP_PASS", "")
@@ -777,7 +783,11 @@ if __name__ == "__main__":
             sys.exit(0)
 
     try:
-        token = obtain_token()
+        if _cli_args.token:
+            token = _cli_args.token
+            log(f"Using token from --token arg (user-id={_cli_args.user_id})")
+        else:
+            token = obtain_token()
 
         # ── Get linked students (multi-child accounts) ────────────────────────
         linked = get_linked_students(token)

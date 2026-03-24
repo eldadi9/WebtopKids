@@ -43,6 +43,22 @@ const REMINDERS_FILE      = join(__dirname, 'sent_reminders.json'); // persists 
 const CHILDREN_CONFIG_FILE = join(__dirname, 'children_config.json');
 const EXTERNAL_LINKS_FILE  = join(__dirname, 'external_links.json');
 
+// ─── Per-user data cache ───────────────────────────────────────────────────────
+function userCachePath(userId) {
+  return join(__dirname, `data_cache_${userId}.json`);
+}
+
+function loadUserCache(userId) {
+  const path = userCachePath(userId);
+  if (!existsSync(path)) return null;
+  try { return JSON.parse(readFileSync(path, 'utf8')); }
+  catch { return null; }
+}
+
+function saveUserCache(userId, data) {
+  writeFileSync(userCachePath(userId), JSON.stringify({ data, timestamp: Date.now() }, null, 2));
+}
+
 // ─── In-memory cache ──────────────────────────────────────────────────────────
 let cache = { data: null, timestamp: 0 };
 
@@ -183,7 +199,7 @@ const ALERT_TYPES_SET = new Set([
   'late', 'absence', 'missing_equipment', 'grade', 'homework_not_done', 'homework', 'good_word', 'attendance',
 ]);
 
-async function sendNewAlerts(newNotifications, prevIds) {
+async function sendNewAlerts(newNotifications, prevIds, sendFn = sendTelegram) {
   if (isQuietHours()) {
     console.log('[alert] Quiet hours (21:00–07:00) — skipping instant alerts');
     return;
@@ -254,7 +270,7 @@ async function sendNewAlerts(newNotifications, prevIds) {
       else if (n.description) lines.push(`📋 ${n.description.slice(0, 200)}`);
     }
 
-    await sendTelegram(lines.filter(Boolean).join('\n'));
+    await sendFn(lines.filter(Boolean).join('\n'));
     // Mark as permanently sent — will NEVER send this alert again
     sentReminders.add(`alert_${nId}`);
     saveSentReminders();
@@ -268,8 +284,9 @@ async function sendNewAlerts(newNotifications, prevIds) {
 //   Tier 2d (key: id_2d) → 2 days before due  → 🟡 early warning
 //   Tier 1d (key: id_1d) → 1 day before due   → 🟠 "מחר חייבים להגיש"
 // Called both at push time AND every hour.
-async function checkDeadlines() {
-  if (!cache.data?.data?.notifications) return;
+async function checkDeadlines(dataOverride = null, sendFn = sendTelegram) {
+  const dataSource = dataOverride ?? cache.data;
+  if (!dataSource?.data?.notifications) return;
   if (isQuietHours()) {
     console.log('[deadline] Quiet hours (21:00–07:00) — skipping deadline check');
     return;
@@ -277,7 +294,7 @@ async function checkDeadlines() {
   const status = loadStatus();
   const now    = new Date();
 
-  for (const n of cache.data.data.notifications) {
+  for (const n of dataSource.data.notifications) {
     if (n.type !== 'homework' || !n.date) continue;
     const id = hwId(n);
     if (status[id]?.done) continue; // marked done by parent
@@ -292,7 +309,7 @@ async function checkDeadlines() {
     if (daysLeft >= 0 && daysLeft < 1 && !sentReminders.has(`${id}_0d`)) {
       sentReminders.add(`${id}_0d`);
       saveSentReminders();
-      await sendTelegram([
+      await sendFn([
         `🔴 <b>היום יום ההגשה!</b>`,
         ``,
         `⏳ <b>הגשה היום!</b>`,
@@ -309,7 +326,7 @@ async function checkDeadlines() {
     else if (daysLeft >= 2 && daysLeft < 3 && !sentReminders.has(`${id}_2d`)) {
       sentReminders.add(`${id}_2d`);
       saveSentReminders();
-      await sendTelegram([
+      await sendFn([
         `🟡 <b>תזכורת — שיעורי בית</b>`,
         ``,
         `📚 מקצוע: <b>${n.subject || '?'}</b>`,
@@ -324,7 +341,7 @@ async function checkDeadlines() {
     else if (daysLeft >= 1 && daysLeft < 2 && !sentReminders.has(`${id}_1d`)) {
       sentReminders.add(`${id}_1d`);
       saveSentReminders();
-      await sendTelegram([
+      await sendFn([
         `🟠 <b>תזכורת דחופה — שיעורי בית!</b>`,
         ``,
         `⚠️ <b>מחר חייבים להגיש!</b>`,
@@ -381,42 +398,32 @@ const DATA_STALE_SECONDS = DATA_STALE_AFTER_MINUTES * 60;
 /** true כשהשרת לא מריץ סקרייפר מקומי ומצפה ל־POST /api/push מהמחשב הביתי */
 const EXPECTS_HOME_PUSH = process.env.USE_LOCAL_SCRAPER === 'false';
 
-// POST /api/push — receive scraped data from local machine
-app.post('/api/push', async (req, res) => {
+// ─── Per-user alert processing ────────────────────────────────────────────────
+async function processAlertsForUser(user, data) {
   try {
-    const { secret, data } = req.body || {};
-    if (secret !== PUSH_SECRET) {
-      console.warn('[push] Rejected: wrong secret');
-      return res.status(403).json({ ok: false, error: 'Unauthorized' });
-    }
-    if (!data) return res.status(400).json({ ok: false, error: 'missing data' });
-    if (data.ok === false) {
-      console.warn('[push] Rejected: scraper returned ok=false:', data.error || '(no error message)');
-      return res.status(400).json({ ok: false, error: 'Scraper failed — cache not updated', scraperError: data.error });
-    }
-    const links = data?.data?.usefulLinks || [];
-    if (links.some(l => (l.href || '').includes('forgotPassword'))) {
-      console.warn('[push] Rejected: data looks like login page (forgotPassword in links)');
-      return res.status(400).json({ ok: false, error: 'Invalid data — login page detected. Run WEBTOP_CAPTURE=true to re-login.' });
+    const chatId = user?.chatId || TELEGRAM_CHAT_ID;
+
+    async function sendTelegramToUser(text) {
+      const targetChatId = (chatId || '').toString().trim();
+      if (!TELEGRAM_TOKEN || !targetChatId) return;
+      try {
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ chat_id: targetChatId, text, parse_mode: 'HTML' }),
+        });
+      } catch (e) {
+        console.error('Telegram error:', e.message);
+      }
     }
 
-    // Capture previous IDs BEFORE updating cache
-    const prevIds = new Set((cache.data?.data?.notifications || []).map(notifId));
-
-    // Update in-memory + disk cache
-    const nowISO = new Date().toISOString();
-    cache = { data: { ...data, extractedAt: nowISO }, timestamp: Date.now() };
-    saveCacheToFile();
+    const prevCache = loadUserCache(user.id);
+    const prevIds = new Set((prevCache?.data?.data?.notifications || []).map(notifId));
 
     const newNotifications = data?.data?.notifications || [];
+    await sendNewAlerts(newNotifications, prevIds, sendTelegramToUser);
+    await checkDeadlines(data, sendTelegramToUser);
 
-    // 1. Instant alerts for late/absence/missing_equipment/grade/homework_not_done
-    await sendNewAlerts(newNotifications, prevIds);
-
-    // 2. Deadline check — also run at push time (not just hourly)
-    await checkDeadlines();
-
-    // 3. New message Telegram alerts (one per unique message — stable key, no duplicates)
     const newMessages = data?.data?.messages || [];
     const seenMsgKeys = new Set();
     const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
@@ -427,7 +434,6 @@ app.post('/api/push', async (req, res) => {
       const subjNorm = normSubject(m.subject);
       const msgKey = `msg_|${norm(m.date)}|${subjNorm}`;
       if (sentReminders.has(msgKey) || seenMsgKeys.has(msgKey)) continue;
-      // Always mark as seen (permanent dedup) even during quiet hours
       sentReminders.add(msgKey);
       seenMsgKeys.add(msgKey);
       saveSentReminders();
@@ -441,41 +447,35 @@ app.post('/api/push', async (req, res) => {
         m.date     ? `📅 ${m.date}${m.time ? ` | ${m.time}` : ''}` : '',
         m.body     ? `\n📝 ${m.body.slice(0, 300)}` : '',
       ].filter(Boolean).join('\n');
-      await sendTelegram(lines);
+      await sendTelegramToUser(lines);
       console.log(`[messages] Sent Telegram for new message: "${m.subject}" from ${m.from}`);
     }
-
-    console.log(`[push] Received ${newNotifications.length} notifications at ${nowISO}`);
-    res.json({ ok: true, received: true, count: newNotifications.length });
   } catch (e) {
-    console.error('[push] Error:', e.message);
-    res.status(500).json({ ok: false, error: 'internal error' });
+    console.error('[processAlertsForUser] Error:', e.message);
   }
+}
+
+// POST /api/push — receive scraped data from local machine
+app.post('/api/push', async (req, res) => {
+  const secret = req.headers['x-push-secret'];
+  if (secret !== PUSH_SECRET) return res.status(403).json({ error: 'Forbidden' });
+  const { userId, data } = req.body;
+  if (!userId || !data) return res.status(400).json({ error: 'Missing userId or data' });
+  saveUserCache(userId, data);
+  const user = findUserById(userId);
+  if (user?.chatId) processAlertsForUser(user, data);
+  res.json({ ok: true });
 });
 
-// GET /api/data — serve from cache; ?refresh=1 sets trigger for home machine
+// GET /api/data — serve from per-user cache; ?refresh=1 sets trigger for home machine
 app.get('/api/data', requireAuth, (req, res) => {
   if (req.query.refresh === '1') {
     triggerPending = true;
     triggerRequestedAt = new Date().toISOString();
   }
-  if (cache.data) {
-    const cacheAge = Math.round((Date.now() - cache.timestamp) / 1000);
-    const stale = cacheAge > DATA_STALE_SECONDS;
-    return res.json({
-      ...cache.data,
-      cached: true,
-      cacheAge,
-      stale,
-      staleThresholdMin: DATA_STALE_AFTER_MINUTES,
-      expectsHomePush: EXPECTS_HOME_PUSH,
-    });
-  }
-  res.status(503).json({
-    ok: false,
-    error: 'No data yet — run push_scrape.bat on the home computer',
-    pushRequired: true,
-  });
+  const userCache = loadUserCache(req.user.id);
+  if (!userCache) return res.status(503).json({ error: 'No data yet' });
+  res.json(userCache);
 });
 
 // GET /api/status — homework done/undone map

@@ -38,6 +38,8 @@ import { join, dirname }            from 'path';
 import { fileURLToPath }            from 'url';
 import { savePendingCookie }        from './cookie_injector.mjs';
 import { runWebtopScraperChild }    from './webtop_scraper_child.mjs';
+import { loadUsers }                from './users.mjs';
+import { decryptToken }             from './auth.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -150,6 +152,85 @@ console.log(`  Poll every ${POLL_INTERVAL}s for on-demand trigger`);
 console.log(`  Started:   ${new Date().toLocaleString('he-IL')}`);
 console.log('');
 
+// ─── Run the scraper for a single user via Python with --user-id / --token ────
+const SCRAPER_TIMEOUT_MS = parseInt(process.env.SCRAPER_TIMEOUT_MS || '600000', 10);
+
+function runScraperForUser(userId, webToken) {
+  return new Promise((resolve, reject) => {
+    const pyScript    = join(__dirname, 'webtop_api_fetch.py');
+    const pythonBin   = process.env.PYTHON_BIN || 'python';
+    const args        = [pyScript, '--user-id', userId, '--token', webToken];
+    const proc        = spawn(pythonBin, args, { env: { ...process.env }, cwd: __dirname });
+
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', d => { stdout += d.toString(); });
+    proc.stderr.on('data', d => { stderr += d.toString(); });
+
+    let timeoutId = null;
+    if (SCRAPER_TIMEOUT_MS > 0) {
+      timeoutId = setTimeout(() => {
+        try { proc.kill('SIGKILL'); } catch {}
+        reject(new Error(`Scraper timeout after ${SCRAPER_TIMEOUT_MS / 1000}s (user ${userId})`));
+      }, SCRAPER_TIMEOUT_MS);
+    }
+
+    proc.on('error', err => {
+      if (timeoutId) clearTimeout(timeoutId);
+      reject(new Error(`Scraper spawn failed (user ${userId}): ${err.message}`));
+    });
+
+    proc.on('close', code => {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (stderr.trim()) log(`[scraper/${userId}] ${stderr.trim().slice(0, 400)}`);
+      if (code !== 0) return reject(new Error(`Scraper exited ${code} (user ${userId})`));
+      try {
+        const line = stdout.trim().split('\n').pop();
+        resolve(JSON.parse(line));
+      } catch (e) {
+        reject(new Error(`Scraper output parse error (user ${userId}): ${e.message}`));
+      }
+    });
+  });
+}
+
+// ─── Scrape all active users and push each to VPS ─────────────────────────────
+async function scrapeAllUsers(reason = 'scheduled') {
+  let users;
+  try {
+    users = loadUsers().filter(u => u.status === 'active' && u.webTokenEncrypted);
+  } catch (e) {
+    log(`[users] Failed to load users: ${e.message}`);
+    return;
+  }
+  if (users.length === 0) {
+    log('[users] No active users with tokens — nothing to scrape');
+    return;
+  }
+  log(`[users] Scraping ${users.length} active user(s)…`);
+  for (const user of users) {
+    let webToken;
+    try {
+      webToken = decryptToken(user.webTokenEncrypted);
+    } catch (e) {
+      log(`[users] Could not decrypt token for user ${user.id}: ${e.message}`);
+      continue;
+    }
+    try {
+      log(`[users] Scraping user ${user.id}…`);
+      const data = await runScraperForUser(user.id, webToken);
+      log(`[users] Pushing user ${user.id} to VPS…`);
+      await pushToVPS(user.id, data);
+      log(`[users] Done for user ${user.id}`);
+    } catch (e) {
+      log(`[users] Error for user ${user.id}: ${e.message}`);
+      if (needsSessionRecovery(e.message)) {
+        await sendTelegram(`${SESSION_EXPIRED_MSG}\n(user: ${user.id})`);
+      }
+    }
+  }
+}
+
 // ─── Run the scraper (timeout + spawn errors + lock ל-Playwright) ─────────────
 async function runScraper() {
   return runWebtopScraperChild({
@@ -220,14 +301,14 @@ function validateScrapeData(data) {
 const PUSH_HTTP_RETRIES   = parseInt(process.env.PUSH_HTTP_RETRIES || '6', 10);
 const PUSH_HTTP_TIMEOUT_MS = parseInt(process.env.PUSH_HTTP_TIMEOUT_MS || '30000', 10);
 
-async function pushToVPS(data) {
+async function pushToVPS(userId, data) {
   let lastErr;
   for (let i = 0; i < PUSH_HTTP_RETRIES; i++) {
     try {
       const res = await fetch(`${VPS_URL}/api/push`, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ secret: PUSH_SECRET, data }),
+        headers: { 'Content-Type': 'application/json', 'x-push-secret': PUSH_SECRET },
+        body:    JSON.stringify({ userId, data }),
         signal:  AbortSignal.timeout(PUSH_HTTP_TIMEOUT_MS),
       });
       if (res.ok) return res.json();
@@ -256,33 +337,10 @@ async function scrapeAndPushBody(reason = 'scheduled') {
     attempt++;
     const start = Date.now();
     try {
-      log(`Scraping… (${reason}${attempt > 1 ? `, ניסיון ${attempt}` : ''})`);
-      const data = await runScraper();
-      const links = data?.data?.usefulLinks || [];
-      const isLoginPage = links.some(l => (l.href || '').includes('forgotPassword'));
-      if (isLoginPage) {
-        log('ERROR — Scrape returned login page.');
-        await sendTelegram(SESSION_EXPIRED_MSG);
-        await waitForCookieAndResume();
-        return;
-      }
-      const notifCount = data?.data?.notifications?.length ?? 0;
-      log(`Scraper OK — ${notifCount} notifications`);
-
-      const issues = validateScrapeData(data);
-      if (issues.length > 0) {
-        for (const issue of issues) log(`[validate] ${issue}`);
-        if (issues.some(i => i.startsWith('CRITICAL'))) {
-          throw new Error(issues.filter(i => i.startsWith('CRITICAL')).join('; '));
-        }
-      } else {
-        log('[validate] All checks passed ✓');
-      }
-
-      log(`Pushing to ${VPS_URL}…`);
-      const result = await pushToVPS(data);
+      log(`Scraping all users… (${reason}${attempt > 1 ? `, ניסיון ${attempt}` : ''})`);
+      await scrapeAllUsers(reason);
       const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-      log(`Push OK — ${result.count ?? '?'} notifications received by VPS (${elapsed}s)`);
+      log(`Scrape+push cycle done (${elapsed}s)`);
       consecutiveScrapeFailures = 0;
       try {
         unlinkSync(SESSION_TG_STAMP);
