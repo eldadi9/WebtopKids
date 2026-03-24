@@ -35,6 +35,7 @@ app.use(express.static(join(__dirname, 'public')));
 const PORT             = process.env.PORT || 3000;
 const TELEGRAM_TOKEN   = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || '').trim();
+const ADMIN_CHAT_ID    = (process.env.ADMIN_CHAT_ID || '').trim() || TELEGRAM_CHAT_ID;
 
 const STATUS_FILE         = join(__dirname, 'homework_status.json');
 const DATA_CACHE_FILE     = join(__dirname, 'data_cache.json');
@@ -186,7 +187,7 @@ async function sendTelegram(text, chatId = TELEGRAM_CHAT_ID) {
 }
 
 async function sendAdminTelegram(text) {
-  return sendTelegram(text, TELEGRAM_CHAT_ID);
+  return sendTelegram(text, ADMIN_CHAT_ID);
 }
 
 // ─── New-alert Telegram sender ────────────────────────────────────────────────
@@ -838,6 +839,18 @@ app.post('/telegram/webhook', async (req, res) => {
     const text = msg.text.trim();
     const chatId = String(msg.chat?.id || '');
 
+    // Allow /start from any chat — handle before admin-only guard
+    if (text === '/start') {
+      const existingUser = findUserByChatId(chatId);
+      if (existingUser) {
+        await sendTelegram(`שלום ${existingUser.name}! 👋 התראות מחוברות.`, chatId);
+      } else {
+        await sendAdminTelegram(`📱 ${chatId} שלח /start — יש לשייך למשתמש`);
+        await sendTelegram('ברוך הבא! המנהל ישייך אותך בקרוב.', chatId);
+      }
+      return;
+    }
+
     if (!TELEGRAM_CHAT_ID || chatId !== TELEGRAM_CHAT_ID) {
       console.warn('[telegram] Ignored message from unknown chat:', chatId);
       return;
@@ -888,15 +901,6 @@ app.post('/telegram/webhook', async (req, res) => {
         logLines = execSync('pm2 logs webtop --lines 15 --nostream 2>&1 | tail -20', { encoding: 'utf8' });
       } catch { logLines = 'לא ניתן לקרוא לוגים'; }
       await sendTelegram('📋 לוגים אחרונים:\n' + logLines.slice(0, 3500));
-
-    } else if (text === '/start') {
-      const existingUser = findUserByChatId(chatId);
-      if (existingUser) {
-        await sendTelegram(`שלום ${existingUser.name}! 👋 התראות מחוברות.`, chatId);
-      } else {
-        await sendAdminTelegram(`📱 ${chatId} שלח /start — יש לשייך למשתמש`);
-        await sendTelegram('ברוך הבא! המנהל ישייך אותך בקרוב.', chatId);
-      }
 
     } else if (text === '/help') {
       await sendTelegram([
@@ -998,6 +1002,8 @@ app.post('/api/admin/users/:id/approve-token', requireAdmin, async (req, res) =>
 
 // POST /api/admin/users/:id/disable
 app.post('/api/admin/users/:id/disable', requireAdmin, (req, res) => {
+  const user = findUserById(req.params.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
   updateUser(req.params.id, { status: 'disabled' });
   res.json({ ok: true });
 });
