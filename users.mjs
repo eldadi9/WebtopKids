@@ -6,12 +6,25 @@ import { randomUUID } from 'crypto';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const USERS_FILE = join(__dirname, 'users.json');
 
+const ALLOWED_FIELDS = ['name', 'phone', 'chatId', 'children', 'role', 'status',
+  'passwordHash', 'webTokenEncrypted', 'webTokenUpdatedAt'];
+
+let cache = null;
+
 export function loadUsers() {
-  if (!existsSync(USERS_FILE)) return [];
-  return JSON.parse(readFileSync(USERS_FILE, 'utf8')).users || [];
+  if (cache !== null) return cache;
+  if (!existsSync(USERS_FILE)) { cache = []; return cache; }
+  try {
+    cache = JSON.parse(readFileSync(USERS_FILE, 'utf8')).users || [];
+  } catch (e) {
+    console.warn('[users] Failed to parse users.json, starting empty:', e.message);
+    cache = [];
+  }
+  return cache;
 }
 
 export function saveUsers(users) {
+  cache = users;
   writeFileSync(USERS_FILE, JSON.stringify({ users }, null, 2));
 }
 
@@ -37,7 +50,12 @@ export function updateUser(id, patch) {
 }
 
 export function createUser(data) {
-  const users = loadUsers();
+  if (data.phone && findUserByPhone(data.phone)) {
+    throw new Error('User with this phone already exists');
+  }
+  const allowed = Object.fromEntries(
+    ALLOWED_FIELDS.filter(k => k in data).map(k => [k, data[k]])
+  );
   const user = {
     id: randomUUID(),
     loginCount: 0,
@@ -45,8 +63,9 @@ export function createUser(data) {
     lastLogin: null,
     lastLoginIp: null,
     tokenPendingApproval: null,
-    ...data
+    ...allowed,
   };
+  const users = loadUsers();
   users.push(user);
   saveUsers(users);
   return user;
