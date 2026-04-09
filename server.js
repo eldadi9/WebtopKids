@@ -3,10 +3,9 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { runWebtopScraperChild } from './webtop_scraper_child.mjs';
-import { config as dotenvConfig } from 'dotenv';
-import { checkPassword, signJwt, requireAuth, requireAdmin, encryptToken } from './auth.mjs';
-import { loadUsers, findUserById, findUserByPhone, findUserByChatId, updateUser } from './users.mjs';
-dotenvConfig();
+import 'dotenv/config';
+import { hashPassword, checkPassword, signJwt, requireAuth, requireAdmin, encryptToken } from './auth.mjs';
+import { loadUsers, createUser, findUserById, findUserByPhone, findUserByChatId, updateUser } from './users.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -62,6 +61,8 @@ function saveUserCache(userId, data) {
 
 // ─── In-memory cache ──────────────────────────────────────────────────────────
 let cache = { data: null, timestamp: 0 };
+
+const telegramPendingLink = new Map(); // chatId → { step: 'awaiting_phone', ts: Date.now() }
 
 // ─── Trigger flag (phone → VPS → home machine) ────────────────────────────────
 let triggerPending = false;
@@ -485,7 +486,7 @@ app.post('/api/push', async (req, res) => {
   if (!/^[a-zA-Z0-9_-]{1,64}$/.test(userId)) return res.status(400).json({ error: 'Invalid userId' });
   saveUserCache(userId, data);
   const user = findUserById(userId);
-  if (user?.chatId) processAlertsForUser(user, data);
+  if (user) processAlertsForUser(user, data);
   res.json({ ok: true });
 });
 
@@ -496,8 +497,15 @@ app.get('/api/data', requireAuth, (req, res) => {
     triggerRequestedAt = new Date().toISOString();
   }
   const userCache = loadUserCache(req.user.id);
-  if (!userCache) return res.status(503).json({ error: 'No data yet' });
-  res.json(userCache);
+  if (!userCache || !userCache.data) return res.status(503).json({ error: 'No data yet' });
+  const cacheAge = userCache.timestamp ? Math.round((Date.now() - userCache.timestamp) / 1000) : null;
+  res.json({
+    ...userCache.data,
+    cacheAge,
+    stale: cacheAge != null && cacheAge > DATA_STALE_SECONDS,
+    staleThresholdMin: DATA_STALE_AFTER_MINUTES,
+    expectsHomePush: EXPECTS_HOME_PUSH,
+  });
 });
 
 // GET /api/status — homework done/undone map
@@ -839,14 +847,31 @@ app.post('/telegram/webhook', async (req, res) => {
     const text = msg.text.trim();
     const chatId = String(msg.chat?.id || '');
 
-    // Allow /start from any chat — handle before admin-only guard
     if (text === '/start') {
       const existingUser = findUserByChatId(chatId);
       if (existingUser) {
-        await sendTelegram(`שלום ${existingUser.name}! 👋 התראות מחוברות.`, chatId);
+        await sendTelegram(`שלום ${existingUser.name}! 👋 התראות כבר מחוברות לחשבונך.`, chatId);
       } else {
-        await sendAdminTelegram(`📱 ${chatId} שלח /start — יש לשייך למשתמש`);
-        await sendTelegram('ברוך הבא! המנהל ישייך אותך בקרוב.', chatId);
+        telegramPendingLink.set(chatId, { step: 'awaiting_phone', ts: Date.now() });
+        await sendTelegram('ברוך הבא ל-WebtopKids! 🎒\nשלח את מספר הטלפון שנרשמת איתו באפליקציה (לדוגמה: 054-1234567)', chatId);
+      }
+      return;
+    }
+
+    // Handle phone-link flow (any user)
+    const pendingLink = telegramPendingLink.get(chatId);
+    if (pendingLink?.step === 'awaiting_phone') {
+      telegramPendingLink.delete(chatId);
+      const normalized = text.replace(/[\s\-]/g, '');
+      const allUsers = loadUsers();
+      const matched = allUsers.find(u => u.phone.replace(/[\s\-]/g, '') === normalized);
+      if (!matched) {
+        await sendTelegram('❌ לא נמצא חשבון עם מספר זה. בדוק שהמספר נכון ונסה שוב עם /start', chatId);
+      } else if (matched.status !== 'active') {
+        await sendTelegram('⏳ החשבון שלך ממתין לאישור מנהל. כשיאושר — שלח /start שוב.', chatId);
+      } else {
+        updateUser(matched.id, { chatId });
+        await sendTelegram(`✅ מעולה ${matched.name}! הטלגרם שלך מחובר. תקבל התראות על ${matched.children.join(', ') || 'הילדים שלך'}.`, chatId);
       }
       return;
     }
@@ -939,6 +964,24 @@ app.post('/api/auth/login', async (req, res) => {
   res.json({ token, name: user.name, role: user.role });
 });
 
+// POST /api/auth/register
+app.post('/api/auth/register', async (req, res) => {
+  const { name, phone, password, children } = req.body || {};
+  if (!name || !phone || !password) return res.status(400).json({ error: 'שם, טלפון וסיסמה הם שדות חובה' });
+  if (findUserByPhone(phone)) return res.status(409).json({ error: 'מספר טלפון זה כבר רשום' });
+  const passwordHash = await hashPassword(password);
+  const childList = Array.isArray(children)
+    ? children.map(c => String(c).trim()).filter(Boolean)
+    : [];
+  createUser({ name, phone, passwordHash, chatId: null, role: 'parent', status: 'pending', children: childList });
+  res.json({ ok: true });
+});
+
+// GET /register
+app.get('/register', (req, res) => {
+  res.sendFile(join(__dirname, 'public', 'register.html'));
+});
+
 // GET /api/auth/me
 app.get('/api/auth/me', requireAuth, (req, res) => {
   const user = findUserById(req.user.id);
@@ -969,8 +1012,8 @@ app.post('/api/token-submit', async (req, res) => {
   res.json({ message: 'Token התקבל! ממתין לאישור המנהל.' });
 });
 
-// GET /admin — serve admin dashboard
-app.get('/admin', requireAdmin, (req, res) => {
+// GET /admin — serve admin dashboard (auth enforced client-side via JS token check)
+app.get('/admin', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'admin.html'));
 });
 
@@ -978,6 +1021,7 @@ app.get('/admin', requireAdmin, (req, res) => {
 app.get('/api/admin/users', requireAdmin, (req, res) => {
   const users = loadUsers().map(u => ({
     id: u.id, name: u.name, phone: u.phone,
+    children: u.children || [],
     status: u.status, lastLogin: u.lastLogin,
     lastLoginIp: u.lastLoginIp, loginCount: u.loginCount,
     chatId: u.chatId, tokenUpdatedAt: u.webTokenUpdatedAt,
@@ -1008,6 +1052,14 @@ app.post('/api/admin/users/:id/disable', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+// POST /api/admin/users/:id/activate
+app.post('/api/admin/users/:id/activate', requireAdmin, (req, res) => {
+  const user = findUserById(req.params.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  updateUser(user.id, { status: 'active' });
+  res.json({ ok: true });
+});
+
 // Fallback → index.html
 app.get('*', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'index.html'));
@@ -1019,18 +1071,39 @@ async function handleTelegramMessage(msg) {
   const text = msg.text.trim();
   const chatId = String(msg.chat?.id || '');
 
-  // Allow /start from any chat — handle before admin-only guard
   if (text === '/start') {
     try {
       const existingUser = findUserByChatId(chatId);
       if (existingUser) {
-        await sendTelegram(`שלום ${existingUser.name}! 👋 התראות מחוברות.`, chatId);
+        await sendTelegram(`שלום ${existingUser.name}! 👋 התראות כבר מחוברות לחשבונך.`, chatId);
       } else {
-        await sendAdminTelegram(`📱 ${chatId} שלח /start — יש לשייך למשתמש`);
-        await sendTelegram('ברוך הבא! המנהל ישייך אותך בקרוב.', chatId);
+        telegramPendingLink.set(chatId, { step: 'awaiting_phone', ts: Date.now() });
+        await sendTelegram('ברוך הבא ל-WebtopKids! 🎒\nשלח את מספר הטלפון שנרשמת איתו באפליקציה (לדוגמה: 054-1234567)', chatId);
       }
     } catch (e) {
       console.error('[telegram/poll] /start error:', e.message);
+    }
+    return;
+  }
+
+  // Handle phone-link flow (any user)
+  const pendingLinkPoll = telegramPendingLink.get(chatId);
+  if (pendingLinkPoll?.step === 'awaiting_phone') {
+    telegramPendingLink.delete(chatId);
+    const normalized = text.replace(/[\s\-]/g, '');
+    const allUsers = loadUsers();
+    const matched = allUsers.find(u => u.phone.replace(/[\s\-]/g, '') === normalized);
+    try {
+      if (!matched) {
+        await sendTelegram('❌ לא נמצא חשבון עם מספר זה. בדוק שהמספר נכון ונסה שוב עם /start', chatId);
+      } else if (matched.status !== 'active') {
+        await sendTelegram('⏳ החשבון שלך ממתין לאישור מנהל. כשיאושר — שלח /start שוב.', chatId);
+      } else {
+        updateUser(matched.id, { chatId });
+        await sendTelegram(`✅ מעולה ${matched.name}! הטלגרם שלך מחובר. תקבל התראות על ${matched.children.join(', ') || 'הילדים שלך'}.`, chatId);
+      }
+    } catch (e) {
+      console.error('[telegram/poll] phone-link error:', e.message);
     }
     return;
   }
