@@ -212,3 +212,40 @@ Reviewed by Code Reviewer + Silent-Failure Hunter agents (2 rounds, 15+ issues f
 DEV-verified: parent sees only their own children, admin sees all.
 NOT deployed to VPS yet.
 ```
+## 2026-05-15 — HIGH-1 completed (DEV ONLY, NOT DEPLOYED)
+
+- Fixed `server.js` so global legacy `DATA_CACHE_FILE` is not loaded at startup when `PUSH_DEFAULT_USER_ID` is empty.
+- Fixed pre-auth / `AUTH_DISABLED` cache path so it returns `null` before `loadUserCache('')`, preventing stale `data_cache_dev_.json` / blank-user cache leaks.
+- DEV tests on `localhost:3002`:
+  - `AUTH_DISABLED=true`, empty `PUSH_DEFAULT_USER_ID`, fake `data_cache_dev.json` + `data_cache_dev_.json` present → `/api/data` returns `503`.
+  - Normal DEV auth mode, no JWT → `/api/data` returns `401`.
+- Agent review:
+  - First pass found HIGH blank-user cache issue; fixed.
+  - Second pass: code-reviewer + silent-failure-hunter reported no HIGH findings.
+- No VPS operations. No deploy. No commit yet.
+
+## 2026-05-15 — HIGH-2 completed (DEV ONLY, NOT DEPLOYED)
+
+- Fixed `server.js` Telegram fan-out to use explicit persisted `user.broadcastHousehold === true` instead of `user.role === 'admin'`.
+- Changed `sendTelegram()` default to direct-only and made it throw on missing token/chatId or Telegram HTTP failure.
+- Fixed marker/cache ordering:
+  - New alert reminders save only after successful Telegram send.
+  - Deadline reminders save only after successful Telegram send.
+  - Message reminders save only after successful Telegram send.
+  - `/api/push` returns `500 alerts_failed_cache_not_updated` and does not call `saveUserCache()` when alert processing fails.
+- Fixed no-chatId silent loss: if a user has alertable content but no Telegram `chatId`, alert processing throws so cache is not advanced.
+- Fixed corrupt per-user cache handling: `loadUserCache()` no longer swallows parse/read failures, preserving the previous-cache safety guard.
+- Fixed local scraper silent loss: `runLocalScrape()` now saves global cache only after `sendNewAlerts()` and `checkDeadlines(nextData)` succeed.
+- Fixed broadcast permission safety:
+  - `users.mjs` does not allow `broadcastHousehold` through generic `createUser()` allow-list.
+  - Existing DEV user records can still carry `broadcastHousehold` as persisted admin-controlled data.
+- DEV tests on `localhost:3002`:
+  - Invalid Telegram token + new unread message -> `/api/push` returns `500`, no user cache file, no reminders file.
+  - User with alertable content and missing `chatId` -> `/api/push` returns `500`, no user cache file.
+  - Corrupt per-user cache file -> `/api/push` returns `500`, corrupt file is not overwritten.
+  - `node --check server.js` and `node --check users.mjs` passed.
+- Agent review:
+  - Multiple review rounds found and fixed HIGH issues: default Telegram fan-out, swallowed Telegram errors, markers saved before send, no-chatId cache advance, local scraper cache advance, corrupt cache swallowing.
+  - Final agent review attempt hit usage limit after local fixes; local validation passed.
+- Temporary DEV test files were created and removed: `users.high2.test.json`, `high2test_*`, `.codex-dev-high2-final.*.log`.
+- No VPS operations. No deploy. No commit yet.

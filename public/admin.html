@@ -6,27 +6,61 @@
   <title>WebtopKids — ניהול</title>
   <link rel="stylesheet" href="/style.css">
   <style>
-    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
-    th, td { padding: 0.6rem 0.8rem; border: 1px solid var(--border, #333); text-align: right; }
-    th { background: var(--surface-1, #1a1a1a); }
-    .badge { padding: 2px 8px; border-radius: 12px; font-size: 0.8rem; }
-    .badge-active { background: #1a4a1a; color: #4ade80; }
-    .badge-pending { background: #4a3a00; color: #fbbf24; }
-    .badge-disabled { background: #3a1a1a; color: #f87171; }
-    button { padding: 4px 12px; border-radius: 6px; border: none; cursor: pointer; font-size: 0.85rem; }
-    .btn-approve { background: #166534; color: #fff; }
-    .btn-disable { background: #7f1d1d; color: #fff; }
-    h2 { margin-bottom: 0.5rem; }
-    .subtitle { color: #888; font-size: 0.9rem; margin-bottom: 1rem; }
+    body { padding: 1.5rem; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+    .admin-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; gap:1rem; }
+    .admin-header h2 { margin:0; color:var(--accent,#8B5CF6); }
+    .admin-actions { display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; }
+    .btn-back-app { background:#1d4ed8; color:#fff; border:none; border-radius:8px; padding:0.5rem 1rem; cursor:pointer; font-size:0.9rem; text-decoration:none; display:inline-flex; align-items:center; }
+    .btn-back-app:hover { opacity:0.85; }
+    .btn-logout { background:#7f1d1d; color:#fff; border:none; border-radius:8px; padding:0.5rem 1rem; cursor:pointer; font-size:0.9rem; }
+    .btn-logout:hover { opacity:0.85; }
+    .section-title { font-size:1rem; font-weight:600; margin:1.5rem 0 0.75rem; color:var(--text-secondary,#94a3b8); }
+    .pending-card { border:2px solid #d97706; border-radius:12px; padding:1rem; margin-bottom:0.75rem; background:rgba(217,119,6,0.06); display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap; }
+    .pending-card .info { line-height:1.5; }
+    .pending-card .info strong { font-size:1rem; }
+    .pending-card .info small { color:var(--text-muted,#6B7280); font-size:0.85rem; }
+    table { width:100%; border-collapse:collapse; margin-top:0.5rem; font-size:0.9rem; }
+    th, td { padding:0.55rem 0.75rem; border:1px solid var(--border,#333); text-align:right; }
+    th { background:var(--surface-1,#1a1a1a); font-weight:600; color:var(--text-secondary,#94a3b8); }
+    tr:hover td { background:rgba(139,92,246,0.04); }
+    .badge { padding:2px 8px; border-radius:12px; font-size:0.8rem; white-space:nowrap; }
+    .badge-active { background:#1a4a1a; color:#4ade80; }
+    .badge-pending { background:#4a3a00; color:#fbbf24; }
+    .badge-disabled { background:#3a1a1a; color:#f87171; }
+    button.btn-approve { background:#166534; color:#fff; border:none; border-radius:6px; padding:4px 10px; cursor:pointer; font-size:0.82rem; margin-left:4px; }
+    button.btn-approve:hover { opacity:0.85; }
+    button.btn-disable { background:#7f1d1d; color:#fff; border:none; border-radius:6px; padding:4px 10px; cursor:pointer; font-size:0.82rem; }
+    button.btn-disable:hover { opacity:0.85; }
+    #no-pending { color:var(--text-muted,#6B7280); font-size:0.9rem; }
+    .children-list { color:var(--text-secondary,#94a3b8); font-size:0.85rem; }
   </style>
 </head>
 <body>
-  <h2>לוח ניהול WebtopKids</h2>
-  <p class="subtitle">ניהול הורים + אישור חיבורי Token</p>
-  <div id="content">טוען...</div>
+  <div class="admin-header">
+    <h2>לוח ניהול WebtopKids 🛠️</h2>
+    <div class="admin-actions">
+      <a class="btn-back-app" href="/">חזרה לאפליקציה</a>
+      <button class="btn-logout" onclick="logout()">יציאה</button>
+    </div>
+  </div>
+
+  <div class="section-title">⏳ ממתינים לאישור</div>
+  <div id="pending-section">טוען...</div>
+
+  <div class="section-title">כל המשתמשים</div>
+  <div id="all-users-section">טוען...</div>
+
   <script>
-    const token = localStorage.getItem('wt_token');
-    if (!token) location.replace('/login');
+    const adminPassword = sessionStorage.getItem('wt_admin_password') || prompt('סיסמת מנהל') || '';
+    if (adminPassword !== '1920') location.href = '/';
+    const token = localStorage.getItem('wt_token') || '';
+
+    function logout() {
+      localStorage.removeItem('wt_token');
+      localStorage.removeItem('wt_name');
+      sessionStorage.removeItem('wt_admin_password');
+      location.href = '/login';
+    }
 
     function esc(s) {
       if (s == null) return '—';
@@ -41,51 +75,75 @@
     async function api(method, path, body) {
       const r = await fetch(path, {
         method,
-        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+        headers: token
+          ? { 'Authorization': 'Bearer ' + token, 'X-Admin-Password': adminPassword, 'Content-Type': 'application/json' }
+          : { 'X-Admin-Password': adminPassword, 'Content-Type': 'application/json' },
         body: body ? JSON.stringify(body) : undefined
       });
-      if (r.status === 401 || r.status === 403) { location.replace('/login'); return null; }
+      if (r.status === 401 || r.status === 403) {
+        document.getElementById('pending-section').innerHTML = '<div id="no-pending">אין הרשאת אדמין להצגת נתונים.</div>';
+        return null;
+      }
       return r.json();
     }
 
-    async function loadUsers() {
-      const users = await api('GET', '/api/admin/users');
-      if (!users) return;
-      const rows = users.map(u => `
-        <tr>
-          <td>${esc(u.name)}</td>
-          <td>${esc(u.phone)}</td>
-          <td><span class="badge badge-${esc(u.status)}">${esc(u.status)}</span></td>
-          <td>${u.lastLogin ? new Date(u.lastLogin).toLocaleString('he-IL') : '—'}</td>
-          <td>${esc(u.lastLoginIp)}</td>
-          <td>${u.loginCount || 0}</td>
-          <td>${u.hasPendingToken ? '⏳ ממתין' : (u.tokenUpdatedAt ? '✅' : '—')}</td>
-          <td>
-            ${u.hasPendingToken ? `<button class="btn-approve" onclick="approveToken('${esc(u.id)}')">אשר Token</button> ` : ''}
-            ${u.status === 'active' ? `<button class="btn-disable" onclick="disableUser('${esc(u.id)}')">בטל גישה</button>` : ''}
-          </td>
-        </tr>
-      `).join('');
-      document.getElementById('content').innerHTML = `
-        <table>
-          <thead><tr><th>שם</th><th>טלפון</th><th>סטטוס</th><th>כניסה אחרונה</th><th>IP</th><th>כניסות</th><th>Token</th><th>פעולות</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      `;
-    }
-
-    async function approveToken(id) {
-      await api('POST', `/api/admin/users/${id}/approve-token`);
-      loadUsers();
+    async function activateUser(id) {
+      await api('POST', `/api/admin/users/${id}/activate`);
+      loadData();
     }
 
     async function disableUser(id) {
       if (!confirm('לבטל גישה למשתמש זה?')) return;
       await api('POST', `/api/admin/users/${id}/disable`);
-      loadUsers();
+      loadData();
     }
 
-    loadUsers();
+    async function loadData() {
+      const users = await api('GET', '/api/admin/users');
+      if (!users) return;
+
+      const pending = users.filter(u => u.status === 'pending');
+      const pendingEl = document.getElementById('pending-section');
+      if (pending.length === 0) {
+        pendingEl.innerHTML = '<div id="no-pending">אין בקשות ממתינות.</div>';
+      } else {
+        pendingEl.innerHTML = pending.map(u => `
+          <div class="pending-card">
+            <div class="info">
+              <strong>${esc(u.name)}</strong><br>
+              <small>${esc(u.phone)}</small>
+              ${u.children && u.children.length ? `<br><small>ילדים: ${esc(u.children.join(', '))}</small>` : ''}
+            </div>
+            <button class="btn-approve" onclick="activateUser('${esc(u.id)}')">אשר משתמש</button>
+          </div>
+        `).join('');
+      }
+
+      const allEl = document.getElementById('all-users-section');
+      const rows = users.map(u => `
+        <tr>
+          <td>${esc(u.name)}</td>
+          <td>${esc(u.phone)}</td>
+          <td class="children-list">${u.children && u.children.length ? esc(u.children.join(', ')) : '—'}</td>
+          <td><span class="badge badge-${esc(u.status)}">${esc(u.status)}</span></td>
+          <td>${u.lastLogin ? new Date(u.lastLogin).toLocaleString('he-IL') : '—'}</td>
+          <td>${u.chatId ? '✅' : '—'}</td>
+          <td>
+            ${u.status === 'pending' ? `<button class="btn-approve" onclick="activateUser('${esc(u.id)}')">אשר</button>` : ''}
+            ${u.status === 'active' ? `<button class="btn-disable" onclick="disableUser('${esc(u.id)}')">בטל גישה</button>` : ''}
+          </td>
+        </tr>
+      `).join('');
+      allEl.innerHTML = `
+        <table>
+          <thead><tr><th>שם</th><th>טלפון</th><th>ילדים</th><th>סטטוס</th><th>כניסה אחרונה</th><th>טלגרם</th><th>פעולות</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    loadData();
+    setInterval(loadData, 30000);
   </script>
 </body>
 </html>

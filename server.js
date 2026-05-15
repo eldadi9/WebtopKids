@@ -96,7 +96,7 @@ function telegramSendTargets(primaryChatId) {
   const target = String(primaryChatId || '').trim();
   const household = telegramHouseholdChatIds();
   const out = new Set(target ? [target] : []);
-  if (target && household.has(target)) {
+  if (target) {
     for (const x of household) out.add(x);
   }
   return [...out];
@@ -121,8 +121,7 @@ function userCachePath(userId) {
 function loadUserCache(userId) {
   const path = userCachePath(userId);
   if (!existsSync(path)) return null;
-  try { return JSON.parse(readFileSync(path, 'utf8')); }
-  catch { return null; }
+  return JSON.parse(readFileSync(path, 'utf8'));
 }
 
 function saveUserCache(userId, data) {
@@ -156,6 +155,10 @@ function saveStatus(status) {
 // ─── Persistent data cache (survives PM2 restart) ─────────────────────────────
 function loadCacheFromFile() {
   try {
+    if (!PUSH_DEFAULT_USER_ID) {
+      console.log('[cache] Skipping global legacy cache load: PUSH_DEFAULT_USER_ID is empty');
+      return;
+    }
     if (!existsSync(DATA_CACHE_FILE)) return;
     const saved = JSON.parse(readFileSync(DATA_CACHE_FILE, 'utf8'));
     if (saved?.data) {
@@ -244,22 +247,31 @@ function isQuietHours() {
 }
 
 // ─── Telegram ─────────────────────────────────────────────────────────────────
-/** `direct`: if true, send only to `chatId` (no household fan-out). Use for /start, linking, command replies. */
-async function sendTelegram(text, chatId = TELEGRAM_CHAT_ID, direct = false) {
-  if (!TELEGRAM_TOKEN || !chatId) return;
+/** `direct`: defaults true. Pass false only after an explicit broadcastHousehold permission check. */
+async function sendTelegram(text, chatId = TELEGRAM_CHAT_ID, direct = true) {
+  if (!TELEGRAM_TOKEN) throw new Error('Telegram token is not configured');
+  if (!chatId) throw new Error('Telegram chatId is not configured');
   const id = String(chatId).trim();
-  if (!id) return;
+  if (!id) throw new Error('Telegram chatId is empty');
   const targets = direct ? [id] : telegramSendTargets(id);
+  const failures = [];
   for (const t of targets) {
     try {
-      await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      const r = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json; charset=utf-8' },
         body:    JSON.stringify({ chat_id: t, text, parse_mode: 'HTML' }),
       });
+      if (!r.ok) {
+        const body = await r.text().catch(() => '');
+        throw new Error(`Telegram HTTP ${r.status}${body ? `: ${body.slice(0, 200)}` : ''}`);
+      }
     } catch (e) {
-      console.error('Telegram error:', e.message);
+      failures.push(`${t}: ${e.message}`);
     }
+  }
+  if (failures.length) {
+    throw new Error(`Telegram send failed (${failures.length}/${targets.length}): ${failures.join('; ')}`);
   }
 }
 
@@ -293,6 +305,12 @@ const ALERT_NAME = {
 const ALERT_TYPES_SET = new Set([
   'late', 'absence', 'missing_equipment', 'grade', 'homework_not_done', 'homework', 'good_word', 'attendance',
 ]);
+
+function hasAlertableContent(data) {
+  const notifications = data?.data?.notifications || [];
+  const messages = data?.data?.messages || [];
+  return notifications.some(n => ALERT_TYPES_SET.has(n.type)) || messages.some(m => !m.read);
+}
 
 async function sendNewAlerts(newNotifications, prevIds, sendFn = sendTelegram, reminders = sentReminders, saveReminders = saveSentReminders) {
   if (isQuietHours()) {
@@ -402,8 +420,6 @@ async function checkDeadlines(dataOverride = null, sendFn = sendTelegram, remind
 
     // ── Tier 0d: on the due date itself ───────────────────────────────────────
     if (daysLeft >= 0 && daysLeft < 1 && !reminders.has(`${id}_0d`)) {
-      reminders.add(`${id}_0d`);
-      saveReminders();
       await sendFn([
         `🔴 <b>היום יום ההגשה!</b>`,
         ``,
@@ -414,13 +430,13 @@ async function checkDeadlines(dataOverride = null, sendFn = sendTelegram, remind
         `📅 מועד הגשה: ${n.date}`,
         n.homeworkText ? `📝 מטלה: ${n.homeworkText}` : '',
       ].filter(Boolean).join('\n'));
+      reminders.add(`${id}_0d`);
+      saveReminders();
       console.log(`[deadline] Sent 0d reminder (היום יום ההגשה): ${n.subject} / ${n.student}`);
     }
 
     // ── Tier 2d: 2 days before due date ───────────────────────────────────────
     else if (daysLeft >= 2 && daysLeft < 3 && !reminders.has(`${id}_2d`)) {
-      reminders.add(`${id}_2d`);
-      saveReminders();
       await sendFn([
         `🟡 <b>תזכורת — שיעורי בית</b>`,
         ``,
@@ -429,13 +445,13 @@ async function checkDeadlines(dataOverride = null, sendFn = sendTelegram, remind
         `📅 מועד הגשה: ${n.date} — עוד <b>יומיים</b>`,
         n.homeworkText ? `📝 מטלה: ${n.homeworkText}` : '',
       ].filter(Boolean).join('\n'));
+      reminders.add(`${id}_2d`);
+      saveReminders();
       console.log(`[deadline] Sent 2d reminder: ${n.subject} / ${n.student}`);
     }
 
     // ── Tier 1d: 1 day before — "מחר חייבים להגיש" ───────────────────────────
     else if (daysLeft >= 1 && daysLeft < 2 && !reminders.has(`${id}_1d`)) {
-      reminders.add(`${id}_1d`);
-      saveReminders();
       await sendFn([
         `🟠 <b>תזכורת דחופה — שיעורי בית!</b>`,
         ``,
@@ -446,6 +462,8 @@ async function checkDeadlines(dataOverride = null, sendFn = sendTelegram, remind
         `📅 מועד הגשה: ${n.date}`,
         n.homeworkText ? `📝 מטלה: ${n.homeworkText}` : '',
       ].filter(Boolean).join('\n'));
+      reminders.add(`${id}_1d`);
+      saveReminders();
       console.log(`[deadline] Sent 1d reminder (מחר חייבים להגיש): ${n.subject} / ${n.student}`);
     }
   }
@@ -463,11 +481,12 @@ async function runLocalScrape() {
     const prevIds = new Set((cache.data?.data?.notifications || []).map(notifId));
     const raw     = await runScraper();
     const nowISO  = new Date().toISOString();
-    cache = { data: { ...raw, extractedAt: nowISO }, timestamp: Date.now() };
-    saveCacheToFile();
+    const nextData = { ...raw, extractedAt: nowISO };
     const newNotifications = raw?.data?.notifications || [];
     await sendNewAlerts(newNotifications, prevIds);
-    await checkDeadlines();
+    await checkDeadlines(nextData);
+    cache = { data: nextData, timestamp: Date.now() };
+    saveCacheToFile();
     console.log(`[scrape] Done — ${newNotifications.length} notifications`);
   } catch (e) {
     console.error('[scrape] Local scrape failed:', e.message);
@@ -501,14 +520,16 @@ async function processAlertsForUser(user, data) {
     const chatId = user?.chatId;
     if (!chatId) {
       console.warn(`[alerts] Skipping user ${user?.id} (${user?.name}) — no chatId paired`);
+      if (hasAlertableContent(data)) {
+        throw new Error(`User ${user?.id || '(unknown)'} has alertable content but no Telegram chatId`);
+      }
       return;
     }
-    const isAdmin = user?.role === 'admin';
+    const broadcastHousehold = user?.broadcastHousehold === true;
 
     async function sendTelegramToUser(text) {
       const targetChatId = String(chatId).trim();
-      if (!TELEGRAM_TOKEN || !targetChatId) return;
-      return sendTelegram(text, targetChatId, !isAdmin);
+      return sendTelegram(text, targetChatId, !broadcastHousehold);
     }
 
     let prevCache;
@@ -537,9 +558,6 @@ async function processAlertsForUser(user, data) {
       const subjNorm = normSubject(m.subject);
       const msgKey = `msg_|${norm(m.date)}|${subjNorm}`;
       if (userReminders.has(msgKey) || seenMsgKeys.has(msgKey)) continue;
-      userReminders.add(msgKey);
-      seenMsgKeys.add(msgKey);
-      saveUserRem();
       if (quietNow) { console.log(`[messages] Quiet hours — skipped Telegram for "${m.subject}"`); continue; }
       const lines = [
         `📨 <b>הודעה חדשה מהמורה!</b>`,
@@ -551,10 +569,14 @@ async function processAlertsForUser(user, data) {
         m.body     ? `\n📝 ${m.body.slice(0, 300)}` : '',
       ].filter(Boolean).join('\n');
       await sendTelegramToUser(lines);
+      userReminders.add(msgKey);
+      seenMsgKeys.add(msgKey);
+      saveUserRem();
       console.log(`[messages] Sent Telegram for new message: "${m.subject}" from ${m.from}`);
     }
   } catch (e) {
     console.error('[processAlertsForUser] Error:', e.message);
+    throw e;
   }
 }
 
@@ -659,11 +681,12 @@ function getAuthenticatedUserCache(req) {
     return null;
   }
 
-  // Pre-auth (AUTH_DISABLED): legacy behavior — serve PUSH_DEFAULT_USER_ID + global cache fallback
+  // Pre-auth (AUTH_DISABLED): legacy behavior — serve only an explicit PUSH_DEFAULT_USER_ID.
   if (!req.user) {
+    if (!PUSH_DEFAULT_USER_ID) return null;
     const def = loadUserCache(userId);
     if (def?.data) return { cache: def, source: 'push_default_legacy' };
-    if (cache?.data) {
+    if (PUSH_DEFAULT_USER_ID && cache?.data) {
       console.warn('[AUTH_DISABLED] serving global_legacy cache for', req.path);
       return { cache: { data: cache.data, timestamp: cache.timestamp }, source: 'global_legacy' };
     }
