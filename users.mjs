@@ -4,7 +4,9 @@ import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const USERS_FILE = join(__dirname, 'users.json');
+const USERS_FILE = process.env.USERS_FILE_OVERRIDE
+  ? (process.env.USERS_FILE_OVERRIDE.match(/^([A-Za-z]:)?[\\/]/) ? process.env.USERS_FILE_OVERRIDE : join(__dirname, process.env.USERS_FILE_OVERRIDE))
+  : join(__dirname, 'users.json');
 
 const ALLOWED_FIELDS = ['name', 'phone', 'chatId', 'children', 'role', 'status',
   'passwordHash', 'webTokenEncrypted', 'webTokenUpdatedAt'];
@@ -23,6 +25,10 @@ export function loadUsers() {
   return cache;
 }
 
+function normalizePhone(p) {
+  return String(p || '').replace(/[\s-]/g, '');
+}
+
 export function saveUsers(users) {
   cache = users;
   writeFileSync(USERS_FILE, JSON.stringify({ users }, null, 2));
@@ -33,7 +39,8 @@ export function findUserById(id) {
 }
 
 export function findUserByPhone(phone) {
-  return loadUsers().find(u => u.phone === phone) || null;
+  const n = normalizePhone(phone);
+  return loadUsers().find(u => normalizePhone(u.phone) === n) || null;
 }
 
 export function findUserByChatId(chatId) {

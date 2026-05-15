@@ -2,16 +2,14 @@ import express from 'express';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { runWebtopScraperChild } from './webtop_scraper_child.mjs';
-import 'dotenv/config';
-import { hashPassword, checkPassword, signJwt, requireAuth, requireAdmin, encryptToken } from './auth.mjs';
-import { loadUsers, createUser, findUserById, findUserByPhone, findUserByChatId, updateUser } from './users.mjs';
 
+// ─── Load .env BEFORE other imports (so they see DOTENV_PATH override) ────────
+// We can't use `import 'dotenv/config'` here because we need to control which file is read.
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
-// ─── Load .env (Node doesn't load it automatically) ──────────────────────────
 function loadEnv() {
-  const envPath = join(__dirname, '.env');
+  const envPath = process.env.DOTENV_PATH
+    ? (process.env.DOTENV_PATH.match(/^([A-Za-z]:)?[\\/]/) ? process.env.DOTENV_PATH : join(__dirname, process.env.DOTENV_PATH))
+    : join(__dirname, '.env');
   if (!existsSync(envPath)) return;
   try {
     for (const line of readFileSync(envPath, 'utf8').split('\n')) {
@@ -26,26 +24,98 @@ function loadEnv() {
   } catch (e) { console.warn('[env] Load failed:', e.message); }
 }
 loadEnv();
+
+import { runWebtopScraperChild } from './webtop_scraper_child.mjs';
+import { hashPassword, checkPassword, signJwt, requireAuth, requireAdmin, encryptToken } from './auth.mjs';
+import { loadUsers, createUser, findUserById, findUserByPhone, findUserByChatId, updateUser } from './users.mjs';
 const app = express();
+
+/** Set to `true` in .env to expose /register and POST /api/auth/register */
+const ENABLE_PUBLIC_REGISTRATION = /^true$/i.test(process.env.ENABLE_PUBLIC_REGISTRATION || '');
+/** Set to `true` in .env to expose /admin and /admin.html */
+const ENABLE_ADMIN_UI = /^true$/i.test(process.env.ENABLE_ADMIN_UI || '');
+// Admin UI password — REQUIRED when ENABLE_ADMIN_UI=true. No default; refuses to start without one.
+const ADMIN_UI_PASSWORD = String(process.env.ADMIN_UI_PASSWORD || '');
+if (ENABLE_ADMIN_UI && (!ADMIN_UI_PASSWORD || ADMIN_UI_PASSWORD.length < 6 || ADMIN_UI_PASSWORD === '1920')) {
+  console.error('🚨 FATAL: ENABLE_ADMIN_UI=true but ADMIN_UI_PASSWORD is missing, weak (<6 chars), or default ("1920"). Set a strong password in .env.');
+  process.exit(1);
+}
+
+app.use((req, res, next) => {
+  const p = req.path || '';
+  if (!ENABLE_ADMIN_UI && (p === '/admin' || p === '/admin.html')) {
+    return res.status(404).type('text/plain').send('Not found');
+  }
+  if (!ENABLE_PUBLIC_REGISTRATION && (p === '/register' || p === '/register.html')) {
+    return res.status(404).type('text/plain').send('Not found');
+  }
+  next();
+});
+
 app.use(express.json());
-app.use(express.static(join(__dirname, 'public')));
+app.use(express.static(join(__dirname, 'public'), {
+  setHeaders(res, filePath) {
+    const fp = String(filePath).replace(/\\/g, '/');
+    if (/(^|\/)index\.html$|(^|\/)login\.html$|(^|\/)register\.html$|(^|\/)app\.js$/.test(fp)) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+    }
+  },
+}));
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const PORT             = process.env.PORT || 3000;
 const TELEGRAM_TOKEN   = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || '').trim();
 const ADMIN_CHAT_ID    = (process.env.ADMIN_CHAT_ID || '').trim() || TELEGRAM_CHAT_ID;
+/** אותן התראות כמו ל-primary — מזהי צ׳אט מופרדים בפסיק או רווח */
+const TELEGRAM_EXTRA_CHAT_IDS = (process.env.TELEGRAM_EXTRA_CHAT_IDS || '')
+  .split(/[,\s]+/)
+  .map((s) => s.trim())
+  .filter(Boolean)
+  .filter((id, i, a) => a.indexOf(id) === i);
 
-const STATUS_FILE         = join(__dirname, 'homework_status.json');
-const DATA_CACHE_FILE     = join(__dirname, 'data_cache.json');
-const SPECIAL_EVENTS_FILE = join(__dirname, 'special_events.json');
-const REMINDERS_FILE      = join(__dirname, 'sent_reminders.json'); // persists across PM2 restarts
-const CHILDREN_CONFIG_FILE = join(__dirname, 'children_config.json');
-const EXTERNAL_LINKS_FILE  = join(__dirname, 'external_links.json');
+function isTrustedTelegramCommandChat(chatId) {
+  const c = String(chatId || '').trim();
+  if (!c) return false;
+  if (TELEGRAM_CHAT_ID && c === TELEGRAM_CHAT_ID) return true;
+  if (ADMIN_CHAT_ID && c === ADMIN_CHAT_ID) return true;
+  return TELEGRAM_EXTRA_CHAT_IDS.includes(c);
+}
+
+/** Telegram IDs that should all receive the same household alerts (Eldad + Moran + env extras). */
+function telegramHouseholdChatIds() {
+  return new Set(
+    [TELEGRAM_CHAT_ID, ADMIN_CHAT_ID, ...TELEGRAM_EXTRA_CHAT_IDS]
+      .map((s) => String(s || '').trim())
+      .filter(Boolean)
+  );
+}
+
+function telegramSendTargets(primaryChatId) {
+  const target = String(primaryChatId || '').trim();
+  const household = telegramHouseholdChatIds();
+  const out = new Set(target ? [target] : []);
+  if (target && household.has(target)) {
+    for (const x of household) out.add(x);
+  }
+  return [...out];
+}
+
+// Optional DEV prefix to isolate cache/state files from production
+const DATA_PREFIX = (process.env.DATA_PREFIX || '').trim();
+function prefixed(name) { return DATA_PREFIX ? `${DATA_PREFIX}_${name}` : name; }
+
+const STATUS_FILE         = join(__dirname, prefixed('homework_status.json'));
+const DATA_CACHE_FILE     = join(__dirname, prefixed('data_cache.json'));
+const SPECIAL_EVENTS_FILE = join(__dirname, 'special_events.json'); // shared (no per-env)
+const REMINDERS_FILE      = join(__dirname, prefixed('sent_reminders.json'));
+const CHILDREN_CONFIG_FILE = join(__dirname, 'children_config.json'); // shared
+const EXTERNAL_LINKS_FILE  = join(__dirname, 'external_links.json'); // shared
 
 // ─── Per-user data cache ───────────────────────────────────────────────────────
 function userCachePath(userId) {
-  return join(__dirname, `data_cache_${userId}.json`);
+  return join(__dirname, prefixed(`data_cache_${userId}.json`));
 }
 
 function loadUserCache(userId) {
@@ -138,13 +208,13 @@ const sentReminders = loadSentReminders(); // ← persisted across restarts
 // ─── Per-user sent-reminders (dedup keys per user — avoids cross-user suppression) ─
 function loadUserReminders(userId) {
   try {
-    const file = join(__dirname, `sent_reminders_${userId}.json`);
+    const file = join(__dirname, prefixed(`sent_reminders_${userId}.json`));
     if (existsSync(file)) return new Set(JSON.parse(readFileSync(file, 'utf8')));
   } catch {}
   return new Set();
 }
 function saveUserReminders(userId, set) {
-  try { writeFileSync(join(__dirname, `sent_reminders_${userId}.json`), JSON.stringify([...set])); }
+  try { writeFileSync(join(__dirname, prefixed(`sent_reminders_${userId}.json`)), JSON.stringify([...set])); }
   catch {}
 }
 
@@ -174,16 +244,22 @@ function isQuietHours() {
 }
 
 // ─── Telegram ─────────────────────────────────────────────────────────────────
-async function sendTelegram(text, chatId = TELEGRAM_CHAT_ID) {
+/** `direct`: if true, send only to `chatId` (no household fan-out). Use for /start, linking, command replies. */
+async function sendTelegram(text, chatId = TELEGRAM_CHAT_ID, direct = false) {
   if (!TELEGRAM_TOKEN || !chatId) return;
-  try {
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
-    });
-  } catch (e) {
-    console.error('Telegram error:', e.message);
+  const id = String(chatId).trim();
+  if (!id) return;
+  const targets = direct ? [id] : telegramSendTargets(id);
+  for (const t of targets) {
+    try {
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body:    JSON.stringify({ chat_id: t, text, parse_mode: 'HTML' }),
+      });
+    } catch (e) {
+      console.error('Telegram error:', e.message);
+    }
   }
 }
 
@@ -411,6 +487,8 @@ function startLocalScraper() {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 const PUSH_SECRET = (process.env.PUSH_SECRET || 'webtop2026').trim();
+/** UUID (ב־users.json) שאליו נדחף מהבית כש־userId חסר ב־POST; גם ברירת מחדל ל־/api/data */
+const PUSH_DEFAULT_USER_ID = (process.env.PUSH_DEFAULT_USER_ID || process.env.PUSH_USER_ID || '').trim();
 /** מעל כמה דקות בלי עדכון מטמון נחשב "ישן" (ברירת מחדל: 45 — מעט מעל 2×15 דק׳ בין דחיפות) */
 const DATA_STALE_AFTER_MINUTES = parseInt(process.env.DATA_STALE_AFTER_MINUTES || '45', 10);
 const DATA_STALE_SECONDS = DATA_STALE_AFTER_MINUTES * 60;
@@ -420,23 +498,26 @@ const EXPECTS_HOME_PUSH = process.env.USE_LOCAL_SCRAPER === 'false';
 // ─── Per-user alert processing ────────────────────────────────────────────────
 async function processAlertsForUser(user, data) {
   try {
-    const chatId = user?.chatId || TELEGRAM_CHAT_ID;
+    const chatId = user?.chatId;
+    if (!chatId) {
+      console.warn(`[alerts] Skipping user ${user?.id} (${user?.name}) — no chatId paired`);
+      return;
+    }
+    const isAdmin = user?.role === 'admin';
 
     async function sendTelegramToUser(text) {
-      const targetChatId = (chatId || '').toString().trim();
+      const targetChatId = String(chatId).trim();
       if (!TELEGRAM_TOKEN || !targetChatId) return;
-      try {
-        await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ chat_id: targetChatId, text, parse_mode: 'HTML' }),
-        });
-      } catch (e) {
-        console.error('Telegram error:', e.message);
-      }
+      return sendTelegram(text, targetChatId, !isAdmin);
     }
 
-    const prevCache = loadUserCache(user.id);
+    let prevCache;
+    try {
+      prevCache = loadUserCache(user.id);
+    } catch (e) {
+      console.error(`[processAlertsForUser] loadUserCache failed for ${user.id} — aborting to preserve prevIds:`, e.stack || e.message);
+      throw e;
+    }
     const prevIds = new Set((prevCache?.data?.data?.notifications || []).map(notifId));
 
     const userReminders = loadUserReminders(user.id);
@@ -479,25 +560,176 @@ async function processAlertsForUser(user, data) {
 
 // POST /api/push — receive scraped data from local machine
 app.post('/api/push', async (req, res) => {
-  const secret = req.headers['x-push-secret'];
-  if (secret !== PUSH_SECRET) return res.status(403).json({ error: 'Forbidden' });
-  const { userId, data } = req.body;
-  if (!userId || !data) return res.status(400).json({ error: 'Missing userId or data' });
-  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(userId)) return res.status(400).json({ error: 'Invalid userId' });
-  saveUserCache(userId, data);
-  const user = findUserById(userId);
-  if (user) processAlertsForUser(user, data);
-  res.json({ ok: true });
+  const headerSecret = String(req.headers['x-push-secret'] || '').trim();
+  const bodySecret = (req.body?.secret != null ? String(req.body.secret) : '').trim();
+  if (headerSecret !== PUSH_SECRET && bodySecret !== PUSH_SECRET) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const { userId: rawUserId, data } = req.body;
+  if (!data) return res.status(400).json({ error: 'Missing data' });
+
+  const effectiveUserId = (rawUserId && String(rawUserId).trim()) || PUSH_DEFAULT_USER_ID || null;
+  if (effectiveUserId) {
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(effectiveUserId)) {
+      return res.status(400).json({ error: 'Invalid userId' });
+    }
+    const user = findUserById(effectiveUserId);
+    if (user) {
+      try {
+        await processAlertsForUser(user, data);
+      } catch (e) {
+        console.error(`[push] processAlertsForUser threw for ${effectiveUserId} — NOT saving cache to preserve prevIds:`, e.message);
+        return res.status(500).json({ error: 'alerts_failed_cache_not_updated' });
+      }
+    }
+    saveUserCache(effectiveUserId, data);
+  }
+
+  // Only overwrite the global legacy cache for the default push user (admin/owner).
+  // Other parents must not leak their data into the global cache.
+  if (effectiveUserId && PUSH_DEFAULT_USER_ID && effectiveUserId === PUSH_DEFAULT_USER_ID) {
+    cache = { data, timestamp: Date.now() };
+    saveCacheToFile();
+  }
+
+  const count = data?.data?.notifications?.length ?? 0;
+  console.log(`[push] userId=${effectiveUserId || '(none)'} notifications=${count} at ${new Date().toISOString()}`);
+  res.json({ ok: true, count });
 });
 
+function requireAdminPassword(req, res, next) {
+  // Accept header OR body only — never query string (would land in access logs / referer).
+  const provided = String(req.headers['x-admin-password'] || req.body?.adminPassword || '');
+  if (!ADMIN_UI_PASSWORD || provided !== ADMIN_UI_PASSWORD) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  next();
+}
+
+// Allowed roles for data-endpoint access. Unknown roles are rejected.
+const DATA_ACCESS_ROLES = new Set(['admin', 'parent']);
+
+// User-id format guard. Matches our randomUUID() output and any conservative id.
+// Prevents path-traversal via data_cache_<id>.json.
+const USER_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+function isValidUserId(id) {
+  return typeof id === 'string' && USER_ID_RE.test(id);
+}
+
+// Resolve which userId's cache the request should see.
+// - pre-auth (AUTH_DISABLED): PUSH_DEFAULT_USER_ID (legacy frontend)
+// - admin: their own id; NO silent fallback to PUSH_DEFAULT_USER_ID (caller decides explicitly)
+// - parent: only their own id; never PUSH_DEFAULT_USER_ID
+// Returns null on malformed JWT — callers must respond 401.
+function effectiveUserIdForRequest(req) {
+  if (!req.user) {
+    // No JWT (AUTH_DISABLED path). Legacy behavior: serve PUSH_DEFAULT_USER_ID's cache.
+    return PUSH_DEFAULT_USER_ID;
+  }
+  if (!isValidUserId(req.user.id)) {
+    console.error('[auth] JWT missing/invalid id claim', { role: req.user.role, path: req.path });
+    return null;
+  }
+  if (!DATA_ACCESS_ROLES.has(req.user.role)) {
+    console.warn('[auth] Unknown role accessing data', { role: req.user.role, id: req.user.id });
+    return null;
+  }
+  return req.user.id;
+}
+
+// Read per-user data for authenticated requests.
+// - admin: serves their own cache; if empty, falls back to PUSH_DEFAULT_USER_ID (oversight role)
+// - parent: serves ONLY their own cache (no fallback, never leaks another household's data)
+// Returns null if there's no data to show (caller should 503).
+function getAuthenticatedUserCache(req) {
+  const userId = effectiveUserIdForRequest(req);
+  if (userId === null) return { error: 'unauthorized' };
+
+  // Admin path: own cache → push-default fallback (explicit, logged when fallback fires)
+  if (req.user && req.user.role === 'admin') {
+    const own = loadUserCache(userId);
+    if (own?.data) return { cache: own, source: 'own' };
+    if (PUSH_DEFAULT_USER_ID && PUSH_DEFAULT_USER_ID !== userId) {
+      const def = loadUserCache(PUSH_DEFAULT_USER_ID);
+      if (def?.data) {
+        console.log(`[auth] admin ${userId} → fallback to PUSH_DEFAULT_USER_ID`);
+        return { cache: def, source: 'push_default' };
+      }
+    }
+    return null;
+  }
+
+  // Pre-auth (AUTH_DISABLED): legacy behavior — serve PUSH_DEFAULT_USER_ID + global cache fallback
+  if (!req.user) {
+    const def = loadUserCache(userId);
+    if (def?.data) return { cache: def, source: 'push_default_legacy' };
+    if (cache?.data) {
+      console.warn('[AUTH_DISABLED] serving global_legacy cache for', req.path);
+      return { cache: { data: cache.data, timestamp: cache.timestamp }, source: 'global_legacy' };
+    }
+    return null;
+  }
+
+  // Parent path: own cache only. No fallback. If missing, return null → 503.
+  const own = loadUserCache(userId);
+  if (!own?.data) return null;
+  return { cache: own, source: 'own' };
+}
+
+function getAuthenticatedData(req) {
+  const result = getAuthenticatedUserCache(req);
+  if (!result || result.error) return {};
+  return result.cache?.data?.data || {};
+}
+
+// Returns the set of child names this request is allowed to see.
+// admin: all children in children_config.json (oversight)
+// parent: only names listed on their user record (children: [])
+// pre-auth (AUTH_DISABLED): all (legacy)
+function allowedChildrenForRequest(req) {
+  const allConfig = loadChildrenConfig();
+  const all = (allConfig.children || []);
+  if (!req.user || req.user.role === 'admin') {
+    return { children: all, names: new Set(all.map(c => c.name)) };
+  }
+  // Find this parent's user record for the children allowlist
+  const u = findUserById(req.user.id);
+  const own = new Set((u?.children || []).map(s => String(s).trim()).filter(Boolean));
+  // Match either full name or trailing name segment (e.g. "אמי" matches "גונשרוביץ אמי")
+  const filtered = all.filter(c => {
+    if (own.has(c.name)) return true;
+    const short = c.name.split(' ').pop();
+    return own.has(short);
+  });
+  return { children: filtered, names: new Set(filtered.map(c => c.name)) };
+}
+
+// AUTH_DISABLED=true: emergency rollback only. Production must NEVER ship with this.
+// Refuses to start if AUTH_DISABLED=true and NODE_ENV=production without explicit ack.
+const AUTH_DISABLED = /^true$/i.test(process.env.AUTH_DISABLED || '');
+if (AUTH_DISABLED) {
+  const isProd = (process.env.NODE_ENV || '').toLowerCase() === 'production';
+  const ack = process.env.AUTH_DISABLED_ACK === 'YES_I_KNOW';
+  if (isProd && !ack) {
+    console.error('🚨 FATAL: AUTH_DISABLED=true in production without AUTH_DISABLED_ACK=YES_I_KNOW. Refusing to start.');
+    process.exit(1);
+  }
+  console.error('🚨🚨🚨 AUTH_DISABLED=true — ALL /api/* data endpoints are PUBLIC (no JWT required). 🚨🚨🚨');
+}
+const maybeAuth = AUTH_DISABLED
+  ? (req, res, next) => { if (req.path?.startsWith('/api/data')) console.warn('[AUTH_DISABLED] public access to', req.path); next(); }
+  : requireAuth;
+
 // GET /api/data — serve from per-user cache; ?refresh=1 sets trigger for home machine
-app.get('/api/data', requireAuth, (req, res) => {
+app.get('/api/data', maybeAuth, (req, res) => {
   if (req.query.refresh === '1') {
     triggerPending = true;
     triggerRequestedAt = new Date().toISOString();
   }
-  const userCache = loadUserCache(req.user.id);
-  if (!userCache || !userCache.data) return res.status(503).json({ error: 'No data yet' });
+  const result = getAuthenticatedUserCache(req);
+  if (result?.error === 'unauthorized') return res.status(401).json({ error: 'Unauthorized' });
+  if (!result?.cache?.data) return res.status(503).json({ error: 'No data yet' });
+  const userCache = result.cache;
   const cacheAge = userCache.timestamp ? Math.round((Date.now() - userCache.timestamp) / 1000) : null;
   res.json({
     ...userCache.data,
@@ -508,10 +740,30 @@ app.get('/api/data', requireAuth, (req, res) => {
   });
 });
 
-// GET /api/status — homework done/undone map
-app.get('/api/status', (req, res) => { res.json(loadStatus()); });
+// GET /api/status — homework done/undone map. Filtered per parent (keys start with "<student>_").
+// Admin/AUTH_DISABLED: returns full map.
+app.get('/api/status', maybeAuth, (req, res) => {
+  const status = loadStatus();
+  if (!req.user || req.user.role === 'admin') return res.json(status);
+  const { names } = allowedChildrenForRequest(req);
+  // Build a Set of student prefixes (full name + short name) for matching
+  const prefixes = new Set();
+  for (const n of names) {
+    prefixes.add(n + '_');
+    const short = n.split(' ').pop();
+    if (short) prefixes.add(short + '_');
+  }
+  const filtered = {};
+  for (const [k, v] of Object.entries(status)) {
+    for (const p of prefixes) {
+      if (k.startsWith(p)) { filtered[k] = v; break; }
+    }
+  }
+  res.json(filtered);
+});
 
 // GET /api/status/system — system health (what works, what needs fix)
+// Public on purpose — lightweight health check, no per-user data
 app.get('/api/status/system', (req, res) => {
   const cacheAge = cache.data ? Math.round((Date.now() - cache.timestamp) / 1000) : null;
   const notifCount = cache.data?.data?.notifications?.length ?? 0;
@@ -539,14 +791,17 @@ app.get('/api/status/system', (req, res) => {
   });
 });
 
-// GET /api/health — comprehensive data integrity check
-app.get('/api/health', (req, res) => {
+// GET /api/health — comprehensive data integrity check (auth required — exposes per-student counts)
+app.get('/api/health', maybeAuth, (req, res) => {
+  const result = getAuthenticatedUserCache(req);
+  if (result?.error === 'unauthorized') return res.status(401).json({ error: 'Unauthorized' });
+  const userCache = result?.cache;
   const checks = [];
-  const d = cache.data?.data;
-  const cacheAge = cache.data ? Math.round((Date.now() - cache.timestamp) / 1000) : null;
+  const d = userCache?.data?.data;
+  const cacheAge = userCache?.timestamp ? Math.round((Date.now() - userCache.timestamp) / 1000) : null;
 
   // 1. Cache freshness
-  if (!cache.data) {
+  if (!userCache?.data) {
     checks.push({ name: 'cache', status: 'FAIL', detail: 'No cached data' });
   } else if (cacheAge > DATA_STALE_SECONDS) {
     checks.push({ name: 'cache', status: 'WARN', detail: `Stale: ${Math.round(cacheAge/60)}min old` });
@@ -559,9 +814,8 @@ app.get('/api/health', (req, res) => {
     const isLogin = (d.usefulLinks || []).some(l => (l.href || '').includes('forgotPassword'));
     checks.push({ name: 'auth', status: isLogin ? 'FAIL' : 'OK', detail: isLogin ? 'Login page detected' : 'Authenticated' });
 
-    // 3. Per-student data
-    const config = loadChildrenConfig();
-    const expected = (config.children || []).map(c => c.name);
+    // 3. Per-student data — filtered per requesting parent (admin sees all)
+    const expected = allowedChildrenForRequest(req).children.map(c => c.name);
     for (const name of expected) {
       const shortName = name.split(' ').pop();
       for (const mapName of ['classEventsByStudent', 'homeworkByStudent', 'gradesByStudent']) {
@@ -601,13 +855,16 @@ app.get('/api/health', (req, res) => {
 });
 
 // GET /api/events — special events (birthdays, parent meetings)
-app.get('/api/events', (req, res) => { res.json(loadSpecialEvents()); });
+app.get('/api/events', maybeAuth, (req, res) => { res.json(loadSpecialEvents()); });
 
-// GET /api/children — per-child config (valid subjects, grade, birthdate)
-app.get('/api/children', (req, res) => { res.json(loadChildrenConfig()); });
+// GET /api/children — per-child config (valid subjects, grade, birthdate) — filtered per parent
+app.get('/api/children', maybeAuth, (req, res) => {
+  const { children } = allowedChildrenForRequest(req);
+  res.json({ children });
+});
 
 // GET /api/external-links — external sites (forms, webtop pages)
-app.get('/api/external-links', (req, res) => {
+app.get('/api/external-links', maybeAuth, (req, res) => {
   try {
     if (existsSync(EXTERNAL_LINKS_FILE))
       return res.json(JSON.parse(readFileSync(EXTERNAL_LINKS_FILE, 'utf8')));
@@ -616,13 +873,16 @@ app.get('/api/external-links', (req, res) => {
 });
 
 // GET /api/schedule — weekly schedule per student
-app.get('/api/schedule', (req, res) => {
-  const schedule = cache.data?.data?.scheduleByStudent || {};
+app.get('/api/schedule', maybeAuth, (req, res) => {
+  const result = getAuthenticatedUserCache(req);
+  if (result?.error === 'unauthorized') return res.status(401).json({ error: 'Unauthorized' });
+  if (!result?.cache?.data) return res.status(503).json({ ok: false, error: 'No data yet', code: 'NO_CACHE_YET' });
+  const schedule = result.cache?.data?.data?.scheduleByStudent || {};
   res.json({ ok: true, schedule });
 });
 
 // POST /api/children/:name/photo — save base64 photo for a child
-app.post('/api/children/:name/photo', express.json({ limit: '10mb' }), (req, res) => {
+app.post('/api/children/:name/photo', maybeAuth, express.json({ limit: '10mb' }), (req, res) => {
   const name  = decodeURIComponent(req.params.name).trim();
   const { photo } = req.body || {};
   if (!photo) return res.status(400).json({ ok: false, error: 'missing photo' });
@@ -643,9 +903,12 @@ app.post('/api/children/:name/photo', express.json({ limit: '10mb' }), (req, res
 
 // GET /api/insights — computed smart summary from current cache + status
 // ?student=אמי — optional filter by student name (fuzzy match)
-app.get('/api/insights', (req, res) => {
+app.get('/api/insights', maybeAuth, (req, res) => {
+  const result = getAuthenticatedUserCache(req);
+  if (result?.error === 'unauthorized') return res.status(401).json({ error: 'Unauthorized' });
+  if (!result?.cache?.data) return res.status(503).json({ ok: false, error: 'No data yet', code: 'NO_CACHE_YET' });
   const studentFilter = req.query.student || '';
-  let notifications = cache.data?.data?.notifications || [];
+  let notifications = result.cache?.data?.data?.notifications || [];
   if (studentFilter) {
     notifications = notifications.filter(n => {
       const s = (n.student || '').trim();
@@ -707,7 +970,7 @@ app.get('/api/insights', (req, res) => {
 });
 
 // POST /api/homework/done — mark homework complete + send Telegram confirmation
-app.post('/api/homework/done', async (req, res) => {
+app.post('/api/homework/done', maybeAuth, async (req, res) => {
   const {
     id, homeworkText, studentName,
     subject: bodySubject, date: bodyDate, lesson: bodyLesson,
@@ -758,7 +1021,7 @@ app.post('/api/homework/done', async (req, res) => {
 });
 
 // POST /api/approval/done — mark approval as "אישרתי" (local status only)
-app.post('/api/approval/done', (req, res) => {
+app.post('/api/approval/done', maybeAuth, (req, res) => {
   const { id } = req.body || {};
   if (!id) return res.status(400).json({ ok: false, error: 'missing id' });
   const status = loadStatus();
@@ -768,7 +1031,7 @@ app.post('/api/approval/done', (req, res) => {
 });
 
 // POST /api/messages/read — mark message as read/unread
-app.post('/api/messages/read', (req, res) => {
+app.post('/api/messages/read', maybeAuth, (req, res) => {
   const { id, read = true } = req.body || {};
   if (!id) return res.status(400).json({ ok: false, error: 'missing id' });
   const status = loadStatus();
@@ -782,7 +1045,7 @@ app.post('/api/messages/read', (req, res) => {
 });
 
 // POST /api/homework/undone — unmark (re-enables future reminders)
-app.post('/api/homework/undone', (req, res) => {
+app.post('/api/homework/undone', maybeAuth, (req, res) => {
   const { id } = req.body || {};
   if (!id) return res.status(400).json({ ok: false, error: 'missing id' });
   const status = loadStatus();
@@ -850,10 +1113,10 @@ app.post('/telegram/webhook', async (req, res) => {
     if (text === '/start') {
       const existingUser = findUserByChatId(chatId);
       if (existingUser) {
-        await sendTelegram(`שלום ${existingUser.name}! 👋 התראות כבר מחוברות לחשבונך.`, chatId);
+        await sendTelegram(`שלום ${existingUser.name}! 👋 התראות כבר מחוברות לחשבונך.`, chatId, true);
       } else {
         telegramPendingLink.set(chatId, { step: 'awaiting_phone', ts: Date.now() });
-        await sendTelegram('ברוך הבא ל-WebtopKids! 🎒\nשלח את מספר הטלפון שנרשמת איתו באפליקציה (לדוגמה: 054-1234567)', chatId);
+        await sendTelegram('ברוך הבא ל-WebtopKids! 🎒\nשלח את מספר הטלפון שנרשמת איתו באפליקציה (לדוגמה: 054-1234567)', chatId, true);
       }
       return;
     }
@@ -866,17 +1129,17 @@ app.post('/telegram/webhook', async (req, res) => {
       const allUsers = loadUsers();
       const matched = allUsers.find(u => u.phone.replace(/[\s\-]/g, '') === normalized);
       if (!matched) {
-        await sendTelegram('❌ לא נמצא חשבון עם מספר זה. בדוק שהמספר נכון ונסה שוב עם /start', chatId);
+        await sendTelegram('❌ לא נמצא חשבון עם מספר זה. בדוק שהמספר נכון ונסה שוב עם /start', chatId, true);
       } else if (matched.status !== 'active') {
-        await sendTelegram('⏳ החשבון שלך ממתין לאישור מנהל. כשיאושר — שלח /start שוב.', chatId);
+        await sendTelegram('⏳ החשבון שלך ממתין לאישור מנהל. כשיאושר — שלח /start שוב.', chatId, true);
       } else {
         updateUser(matched.id, { chatId });
-        await sendTelegram(`✅ מעולה ${matched.name}! הטלגרם שלך מחובר. תקבל התראות על ${matched.children.join(', ') || 'הילדים שלך'}.`, chatId);
+        await sendTelegram(`✅ מעולה ${matched.name}! הטלגרם שלך מחובר. תקבל התראות על ${matched.children.join(', ') || 'הילדים שלך'}.`, chatId, true);
       }
       return;
     }
 
-    if (!TELEGRAM_CHAT_ID || chatId !== TELEGRAM_CHAT_ID) {
+    if (!isTrustedTelegramCommandChat(chatId)) {
       console.warn('[telegram] Ignored message from unknown chat:', chatId);
       return;
     }
@@ -884,13 +1147,13 @@ app.post('/telegram/webhook', async (req, res) => {
     if (text.startsWith('/cookie ')) {
       const cookieValue = text.slice('/cookie '.length).trim();
       if (cookieValue.length < 10) {
-        await sendTelegram('❌ Cookie קצר מדי — נסה שוב');
+        await sendTelegram('❌ Cookie קצר מדי — נסה שוב', chatId, true);
         return;
       }
       pendingCookie = cookieValue;
       pendingCookieAt = new Date().toISOString();
       console.log(`[cookie] Received via Telegram (${cookieValue.length} chars)`);
-      await sendTelegram('✅ Cookie התקבל! המחשב הביתי יחדש את ה-session תוך ~30 שניות.');
+      await sendTelegram('✅ Cookie התקבל! המחשב הביתי יחדש את ה-session תוך ~30 שניות.', chatId, true);
 
     } else if (text === '/status') {
       const ageMin = cache.timestamp
@@ -907,17 +1170,17 @@ app.post('/telegram/webhook', async (req, res) => {
         isLoginPage ? '🔴 Session פג — שלח /cookie' : '',
         triggerPending ? '⏳ Refresh ממתין...' : '',
       ].filter(Boolean).join('\n');
-      await sendTelegram(lines);
+      await sendTelegram(lines, chatId, true);
 
     } else if (text === '/refresh') {
       if (triggerPending) {
-        await sendTelegram('⏳ Refresh כבר ממתין — המחשב הביתי יטפל בזה בקרוב.');
+        await sendTelegram('⏳ Refresh כבר ממתין — המחשב הביתי יטפל בזה בקרוב.', chatId, true);
         return;
       }
       triggerPending = true;
       triggerRequestedAt = new Date().toISOString();
       console.log('[telegram] /refresh triggered via Telegram');
-      await sendTelegram('🔄 בקשת Refresh נשלחה! המחשב הביתי יסרוק תוך ~30 שניות.');
+      await sendTelegram('🔄 בקשת Refresh נשלחה! המחשב הביתי יסרוק תוך ~30 שניות.', chatId, true);
 
     } else if (text === '/logs') {
       const { execSync } = await import('child_process');
@@ -925,7 +1188,7 @@ app.post('/telegram/webhook', async (req, res) => {
       try {
         logLines = execSync('pm2 logs webtop --lines 15 --nostream 2>&1 | tail -20', { encoding: 'utf8' });
       } catch { logLines = 'לא ניתן לקרוא לוגים'; }
-      await sendTelegram('📋 לוגים אחרונים:\n' + logLines.slice(0, 3500));
+      await sendTelegram('📋 לוגים אחרונים:\n' + logLines.slice(0, 3500), chatId, true);
 
     } else if (text === '/help') {
       await sendTelegram([
@@ -936,10 +1199,10 @@ app.post('/telegram/webhook', async (req, res) => {
         '/logs — לוגים אחרונים',
         '/cookie &lt;value&gt; — חדש session',
         '/help — הצג עזרה זו',
-      ].join('\n'));
+      ].join('\n'), chatId, true);
 
     } else {
-      await sendTelegram(`❓ פקודה לא מוכרת: <code>${text}</code>\nשלח /help לרשימת הפקודות.`);
+      await sendTelegram(`❓ פקודה לא מוכרת: <code>${text}</code>\nשלח /help לרשימת הפקודות.`, chatId, true);
     }
   } catch (e) {
     console.error('[telegram/webhook] Error:', e.message);
@@ -952,7 +1215,19 @@ app.post('/api/auth/login', async (req, res) => {
   if (!phone || !password) return res.status(400).json({ error: 'Missing phone or password' });
   const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
   const user = findUserByPhone(phone);
-  if (!user || user.status !== 'active') return res.status(401).json({ error: 'פרטים שגויים' });
+  if (!user) return res.status(401).json({ error: 'פרטים שגויים' });
+  if (user.status === 'pending') {
+    return res.status(403).json({
+      error: 'החשבון ממתין לאישור מנהל. אחרי האישור תוכל להיכנס כאן — לא צריך להירשם שוב.',
+      code: 'pending',
+    });
+  }
+  if (user.status !== 'active') {
+    return res.status(403).json({
+      error: 'החשבון לא פעיל (למשל מנהל מושבת). פנה למנהל המערכת או היכנס כחשבון הורה פעיל.',
+      code: 'inactive',
+    });
+  }
   const ok = await checkPassword(password, user.passwordHash);
   if (!ok) return res.status(401).json({ error: 'פרטים שגויים' });
   updateUser(user.id, {
@@ -966,6 +1241,9 @@ app.post('/api/auth/login', async (req, res) => {
 
 // POST /api/auth/register
 app.post('/api/auth/register', async (req, res) => {
+  if (!ENABLE_PUBLIC_REGISTRATION) {
+    return res.status(403).json({ error: 'ההרשמה הציבורית כבויה כרגע' });
+  }
   const { name, phone, password, children } = req.body || {};
   if (!name || !phone || !password) return res.status(400).json({ error: 'שם, טלפון וסיסמה הם שדות חובה' });
   if (findUserByPhone(phone)) return res.status(409).json({ error: 'מספר טלפון זה כבר רשום' });
@@ -979,6 +1257,9 @@ app.post('/api/auth/register', async (req, res) => {
 
 // GET /register
 app.get('/register', (req, res) => {
+  if (!ENABLE_PUBLIC_REGISTRATION) {
+    return res.status(404).type('text/plain').send('Not found');
+  }
   res.sendFile(join(__dirname, 'public', 'register.html'));
 });
 
@@ -1014,11 +1295,14 @@ app.post('/api/token-submit', async (req, res) => {
 
 // GET /admin — serve admin dashboard (auth enforced client-side via JS token check)
 app.get('/admin', (req, res) => {
+  if (!ENABLE_ADMIN_UI) {
+    return res.status(404).type('text/plain').send('Not found');
+  }
   res.sendFile(join(__dirname, 'public', 'admin.html'));
 });
 
 // GET /api/admin/users
-app.get('/api/admin/users', requireAdmin, (req, res) => {
+app.get('/api/admin/users', requireAdminPassword, (req, res) => {
   const users = loadUsers().map(u => ({
     id: u.id, name: u.name, phone: u.phone,
     children: u.children || [],
@@ -1031,7 +1315,7 @@ app.get('/api/admin/users', requireAdmin, (req, res) => {
 });
 
 // POST /api/admin/users/:id/approve-token
-app.post('/api/admin/users/:id/approve-token', requireAdmin, async (req, res) => {
+app.post('/api/admin/users/:id/approve-token', requireAdminPassword, async (req, res) => {
   const user = findUserById(req.params.id);
   if (!user?.tokenPendingApproval) return res.status(400).json({ error: 'No pending token' });
   updateUser(user.id, {
@@ -1040,12 +1324,12 @@ app.post('/api/admin/users/:id/approve-token', requireAdmin, async (req, res) =>
     tokenPendingApproval: null,
     status: 'active'
   });
-  if (user.chatId) await sendTelegram('✅ חשבונך חובר! אפשר להיכנס לאפליקציה.', user.chatId);
+  if (user.chatId) await sendTelegram('✅ חשבונך חובר! אפשר להיכנס לאפליקציה.', user.chatId, true);
   res.json({ ok: true });
 });
 
 // POST /api/admin/users/:id/disable
-app.post('/api/admin/users/:id/disable', requireAdmin, (req, res) => {
+app.post('/api/admin/users/:id/disable', requireAdminPassword, (req, res) => {
   const user = findUserById(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
   updateUser(req.params.id, { status: 'disabled' });
@@ -1053,7 +1337,7 @@ app.post('/api/admin/users/:id/disable', requireAdmin, (req, res) => {
 });
 
 // POST /api/admin/users/:id/activate
-app.post('/api/admin/users/:id/activate', requireAdmin, (req, res) => {
+app.post('/api/admin/users/:id/activate', requireAdminPassword, (req, res) => {
   const user = findUserById(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
   updateUser(user.id, { status: 'active' });
@@ -1075,10 +1359,10 @@ async function handleTelegramMessage(msg) {
     try {
       const existingUser = findUserByChatId(chatId);
       if (existingUser) {
-        await sendTelegram(`שלום ${existingUser.name}! 👋 התראות כבר מחוברות לחשבונך.`, chatId);
+        await sendTelegram(`שלום ${existingUser.name}! 👋 התראות כבר מחוברות לחשבונך.`, chatId, true);
       } else {
         telegramPendingLink.set(chatId, { step: 'awaiting_phone', ts: Date.now() });
-        await sendTelegram('ברוך הבא ל-WebtopKids! 🎒\nשלח את מספר הטלפון שנרשמת איתו באפליקציה (לדוגמה: 054-1234567)', chatId);
+        await sendTelegram('ברוך הבא ל-WebtopKids! 🎒\nשלח את מספר הטלפון שנרשמת איתו באפליקציה (לדוגמה: 054-1234567)', chatId, true);
       }
     } catch (e) {
       console.error('[telegram/poll] /start error:', e.message);
@@ -1095,12 +1379,12 @@ async function handleTelegramMessage(msg) {
     const matched = allUsers.find(u => u.phone.replace(/[\s\-]/g, '') === normalized);
     try {
       if (!matched) {
-        await sendTelegram('❌ לא נמצא חשבון עם מספר זה. בדוק שהמספר נכון ונסה שוב עם /start', chatId);
+        await sendTelegram('❌ לא נמצא חשבון עם מספר זה. בדוק שהמספר נכון ונסה שוב עם /start', chatId, true);
       } else if (matched.status !== 'active') {
-        await sendTelegram('⏳ החשבון שלך ממתין לאישור מנהל. כשיאושר — שלח /start שוב.', chatId);
+        await sendTelegram('⏳ החשבון שלך ממתין לאישור מנהל. כשיאושר — שלח /start שוב.', chatId, true);
       } else {
         updateUser(matched.id, { chatId });
-        await sendTelegram(`✅ מעולה ${matched.name}! הטלגרם שלך מחובר. תקבל התראות על ${matched.children.join(', ') || 'הילדים שלך'}.`, chatId);
+        await sendTelegram(`✅ מעולה ${matched.name}! הטלגרם שלך מחובר. תקבל התראות על ${matched.children.join(', ') || 'הילדים שלך'}.`, chatId, true);
       }
     } catch (e) {
       console.error('[telegram/poll] phone-link error:', e.message);
@@ -1108,7 +1392,7 @@ async function handleTelegramMessage(msg) {
     return;
   }
 
-  if (!TELEGRAM_CHAT_ID || chatId !== TELEGRAM_CHAT_ID) {
+  if (!isTrustedTelegramCommandChat(chatId)) {
     console.warn('[telegram] Ignored message from unknown chat:', chatId);
     return;
   }
@@ -1116,11 +1400,11 @@ async function handleTelegramMessage(msg) {
   try {
     if (text.startsWith('/cookie ')) {
       const cookieValue = text.slice('/cookie '.length).trim();
-      if (cookieValue.length < 10) { await sendTelegram('❌ Cookie קצר מדי — נסה שוב'); return; }
+      if (cookieValue.length < 10) { await sendTelegram('❌ Cookie קצר מדי — נסה שוב', chatId, true); return; }
       pendingCookie = cookieValue;
       pendingCookieAt = new Date().toISOString();
       console.log(`[cookie] Received via Telegram polling (${cookieValue.length} chars)`);
-      await sendTelegram('✅ Cookie התקבל! המחשב הביתי יחדש את ה-session תוך ~30 שניות.');
+      await sendTelegram('✅ Cookie התקבל! המחשב הביתי יחדש את ה-session תוך ~30 שניות.', chatId, true);
     } else if (text === '/status') {
       const ageMin = cache.timestamp ? Math.round((Date.now() - cache.timestamp) / 60000) : null;
       const d = cache.data?.data;
@@ -1133,19 +1417,19 @@ async function handleTelegramMessage(msg) {
         isLoginPage ? '🔴 Session פג — שלח /cookie' : '',
         triggerPending ? '⏳ Refresh ממתין...' : '',
       ].filter(Boolean).join('\n');
-      await sendTelegram(lines);
+      await sendTelegram(lines, chatId, true);
     } else if (text === '/refresh') {
-      if (triggerPending) { await sendTelegram('⏳ Refresh כבר ממתין — המחשב הביתי יטפל בזה בקרוב.'); return; }
+      if (triggerPending) { await sendTelegram('⏳ Refresh כבר ממתין — המחשב הביתי יטפל בזה בקרוב.', chatId, true); return; }
       triggerPending = true;
       triggerRequestedAt = new Date().toISOString();
       console.log('[telegram] /refresh triggered via Telegram polling');
-      await sendTelegram('🔄 בקשת Refresh נשלחה! המחשב הביתי יסרוק תוך ~30 שניות.');
+      await sendTelegram('🔄 בקשת Refresh נשלחה! המחשב הביתי יסרוק תוך ~30 שניות.', chatId, true);
     } else if (text === '/logs') {
       const { execSync } = await import('child_process');
       let logLines = '';
       try { logLines = execSync('pm2 logs webtop --lines 15 --nostream 2>&1 | tail -20', { encoding: 'utf8' }); }
       catch { logLines = 'לא ניתן לקרוא לוגים'; }
-      await sendTelegram('📋 לוגים אחרונים:\n' + logLines.slice(0, 3500));
+      await sendTelegram('📋 לוגים אחרונים:\n' + logLines.slice(0, 3500), chatId, true);
     } else if (text === '/help') {
       await sendTelegram([
         '🤖 <b>Webtop Bot — פקודות זמינות:</b>',
@@ -1155,9 +1439,9 @@ async function handleTelegramMessage(msg) {
         '/logs — לוגים אחרונים',
         '/cookie &lt;value&gt; — חדש session',
         '/help — הצג עזרה זו',
-      ].join('\n'));
+      ].join('\n'), chatId, true);
     } else {
-      await sendTelegram(`❓ פקודה לא מוכרת: <code>${text}</code>\nשלח /help לרשימת הפקודות.`);
+      await sendTelegram(`❓ פקודה לא מוכרת: <code>${text}</code>\nשלח /help לרשימת הפקודות.`, chatId, true);
     }
   } catch (e) {
     console.error('[telegram/poll] Error handling command:', e.message);
@@ -1205,6 +1489,10 @@ async function pollTelegram() {
 loadCacheFromFile();
 app.listen(PORT, () => {
   console.log(`Webtop dashboard running on http://localhost:${PORT}`);
+  console.log(`[config] Public registration: ${ENABLE_PUBLIC_REGISTRATION}`);
+  console.log(`[config] Admin UI: ${ENABLE_ADMIN_UI}`);
+  const hh = [...telegramHouseholdChatIds()].join(', ');
+  if (hh) console.log(`[config] Telegram household (shared alerts): ${hh}`);
   startDeadlineReminders();
   startLocalScraper();
   if (TELEGRAM_TOKEN && TELEGRAM_CHAT_ID) {

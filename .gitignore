@@ -5,6 +5,15 @@ npm-debug.log*
 # Environment & secrets
 .env
 *.env
+.env.dev
+.env.local
+
+# DEV-only data files
+users.dev.json
+data_cache_dev_*.json
+
+# Backups
+backups/
 
 # Playwright session (contains login cookies)
 .webtop_session.json

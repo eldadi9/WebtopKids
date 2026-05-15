@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebtopKids — הרשמה</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    body { display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; }
+    .login-card { background:var(--surface-1,#1e293b); border-radius:16px; padding:2rem; width:340px; box-shadow:0 4px 24px rgba(0,0,0,0.3); }
+    .login-card h2 { margin:0 0 1.5rem; text-align:center; color:var(--accent,#8B5CF6); }
+    .login-card input { width:100%; box-sizing:border-box; margin:0.4rem 0; padding:0.75rem; border-radius:8px; border:1px solid var(--border,#334155); background:var(--surface-2,#0f172a); color:inherit; font-size:1rem; }
+    .login-card button.btn-submit { width:100%; margin-top:1rem; padding:0.75rem; background:var(--accent,#8B5CF6); color:#fff; border:none; border-radius:8px; cursor:pointer; font-size:1rem; font-weight:600; }
+    .login-card button.btn-submit:hover { opacity:0.9; }
+    .error { color:#f87171; font-size:0.9rem; margin-top:0.75rem; min-height:1.2em; text-align:center; }
+    .login-card a { display:block; text-align:center; margin-top:0.75rem; color:var(--accent,#8B5CF6); font-size:0.9rem; text-decoration:none; }
+    .login-card a:hover { text-decoration:underline; }
+    .children-section { margin-top:0.75rem; }
+    .children-section label { font-size:0.9rem; color:var(--text-secondary,#94a3b8); display:block; margin-bottom:0.25rem; }
+    .child-row { display:flex; gap:0.4rem; align-items:center; margin-bottom:0.4rem; }
+    .child-row input { flex:1; margin:0; }
+    .btn-remove { background:#7f1d1d; color:#fff; border:none; border-radius:6px; padding:0.4rem 0.6rem; cursor:pointer; font-size:0.85rem; flex-shrink:0; }
+    .btn-add { margin-top:0.25rem; background:transparent; border:1px solid var(--accent,#8B5CF6); color:var(--accent,#8B5CF6); border-radius:6px; padding:0.4rem 0.9rem; cursor:pointer; font-size:0.85rem; }
+    .btn-add:hover { background:var(--accent,#8B5CF6); color:#fff; }
+    #success { text-align:center; padding:1rem 0; color:#4ade80; font-size:1rem; line-height:1.6; }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <h2>WebtopKids 🎒</h2>
+    <div id="register-form">
+      <input id="name" type="text" placeholder="שם מלא" autocomplete="name" />
+      <input id="phone" type="tel" placeholder="מספר טלפון" autocomplete="tel" />
+      <input id="pass" type="password" placeholder="סיסמה" autocomplete="new-password" />
+      <div class="children-section">
+        <label>ילדים (אופציונלי)</label>
+        <div id="children-list">
+          <div class="child-row">
+            <input type="text" class="child-input" placeholder="שם ילד/ה" />
+          </div>
+        </div>
+        <button class="btn-add" onclick="addChild()">+ הוסף ילד/ה</button>
+      </div>
+      <button class="btn-submit" onclick="doRegister()">הרשמה</button>
+      <div class="error" id="err"></div>
+    </div>
+    <div id="success" style="display:none">✅ בקשתך נשלחה! המנהל יאשר את חשבונך בקרוב.</div>
+    <a href="/login">כבר רשום? כניסה</a>
+  </div>
+  <script>
+    function addChild() {
+      const list = document.getElementById('children-list');
+      if (list.querySelectorAll('.child-row').length >= 6) return;
+      const row = document.createElement('div');
+      row.className = 'child-row';
+      row.innerHTML = '<input type="text" class="child-input" placeholder="שם ילד/ה" /><button class="btn-remove" onclick="this.parentElement.remove()">×</button>';
+      list.appendChild(row);
+    }
+
+    async function doRegister() {
+      const name = document.getElementById('name').value.trim();
+      const phone = document.getElementById('phone').value.trim();
+      const password = document.getElementById('pass').value;
+      const children = [...document.querySelectorAll('.child-input')]
+        .map(i => i.value.trim()).filter(Boolean);
+      document.getElementById('err').textContent = '';
+      if (!name || !phone || !password) { document.getElementById('err').textContent = 'יש למלא את כל השדות'; return; }
+      try {
+        const r = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, phone, password, children })
+        });
+        const d = await r.json();
+        if (!r.ok) { document.getElementById('err').textContent = d.error || 'שגיאה'; return; }
+        document.getElementById('register-form').style.display = 'none';
+        document.getElementById('success').style.display = '';
+      } catch(e) {
+        document.getElementById('err').textContent = 'שגיאת רשת — נסה שוב';
+      }
+    }
+  </script>
+</body>
+</html>

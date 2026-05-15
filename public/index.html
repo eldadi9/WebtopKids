@@ -14,7 +14,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=28" />
+  <link rel="stylesheet" href="style.css?v=29" />
 </head>
 <body>
 
@@ -46,6 +46,9 @@
         <div class="header-icons-btns">
           <button id="btn-theme" class="btn-theme" title="החלף מצב (כהה/בהיר)" aria-label="החלף ערכת נושא">
             <span class="theme-icon">🌙</span>
+          </button>
+          <button id="btn-admin" class="btn-admin" onclick="openAdminGate()" title="ניהול" aria-label="ניהול">
+            <span class="admin-icon">⚙</span>
           </button>
           <button id="btn-refresh" class="btn-refresh" onclick="refresh()" title="רענן נתונים">
             <span class="refresh-icon">🔄</span>
@@ -206,7 +209,7 @@
     </div>
   </div>
 
-  <script src="app.js?v=17"></script>
+  <script src="app.js?v=21"></script>
   <script>
     window.onerror = function(msg, url, line, col, err) {
       console.error('App error:', msg, 'at', line + ':' + col, err);

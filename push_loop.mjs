@@ -17,6 +17,8 @@
  * .env keys used:
  *   VPS_URL         — e.g. https://myserver.com (required)
  *   PUSH_SECRET     — shared secret (default: webtop2026)
+ *   PUSH_USER_ID    — UUID ב־users.json (בשרת): כשאין active user עם webTokenEncrypted במחשב הבית,
+ *                     הלולאה מריצה משיכה אחת דרך API/קובץ סשן (.env + webtop_api_fetch.py) ודוחפת ל־userId זה
  *   SCRAPE_INTERVAL — minutes between pushes (default: 15)
  *   POLL_INTERVAL   — seconds between trigger polls (default: 30)
  *   PUSH_RETRY_FOREVER — if not "false", retry failed scrapes forever with backoff (default: on)
@@ -55,7 +57,9 @@ function resolvePushLoopLogPath() {
 
 // ─── Load .env manually (no dotenv dependency) ────────────────────────────────
 function loadDotEnv() {
-  const envPath = join(__dirname, '.env');
+  const envPath = process.env.DOTENV_PATH
+    ? (process.env.DOTENV_PATH.match(/^([A-Za-z]:)?[\\/]/) ? process.env.DOTENV_PATH : join(__dirname, process.env.DOTENV_PATH))
+    : join(__dirname, '.env');
   if (!existsSync(envPath)) return;
   const lines = readFileSync(envPath, 'utf8').split('\n');
   for (const line of lines) {
@@ -76,6 +80,8 @@ const PUSH_LOOP_LOG_PATH = resolvePushLoopLogPath();
 let VPS_URL = (process.env.VPS_URL || 'http://76.13.8.113:3001').replace(/\/$/, '');
 if (VPS_URL.includes('/api/push')) VPS_URL = VPS_URL.replace(/\/api\/push.*$/, ''); // base URL only
 const PUSH_SECRET     =  process.env.PUSH_SECRET      || 'webtop2026';
+/** כשאין webTokenEncrypted ב־users.json המקומי — דחוף ל־VPS תחת UUID זה (חייב להתאים ל־login בפורטל) */
+const PUSH_USER_ID    =  (process.env.PUSH_USER_ID || '').trim();
 const SCRAPE_INTERVAL = parseInt(process.env.SCRAPE_INTERVAL || '15',  10); // minutes
 const POLL_INTERVAL   = parseInt(process.env.POLL_INTERVAL   || '30',  10); // seconds
 const RETRY_DELAY     = parseInt(process.env.RETRY_DELAY     || '120', 10); // seconds (2 min)
@@ -149,6 +155,7 @@ console.log('╚═════════════════════�
 console.log(`  VPS:       ${VPS_URL}`);
 console.log(`  Push every ${SCRAPE_INTERVAL} min`);
 console.log(`  Poll every ${POLL_INTERVAL}s for on-demand trigger`);
+if (PUSH_USER_ID) console.log(`  PUSH_USER_ID: ${PUSH_USER_ID} (מילוי אוטומטי כשאין webTokenEncrypted מקומי)`);
 console.log(`  Started:   ${new Date().toLocaleString('he-IL')}`);
 console.log('');
 
@@ -204,7 +211,37 @@ async function scrapeAllUsers(reason = 'scheduled') {
     return;
   }
   if (users.length === 0) {
-    log('[users] No active users with tokens — nothing to scrape');
+    if (!PUSH_USER_ID) {
+      log('[users] אין משתמש active עם webTokenEncrypted במחשב זה — וגם אין PUSH_USER_ID ב־.env');
+      log('[users]   אפשרות א׳: לאשר טוקן Webtop למשתמש ב־admin (webTokenEncrypted במקומי+שרת)');
+      log('[users]   אפשרות ב׳: הוסף ל־.env  PUSH_USER_ID=<uuid של ההורה מה־users.json בשרת>');
+      log('[users]   ודא WEBTOP_USER/WEBTOP_PASS או קובץ .webtop_session.json ל־webtop_api_fetch.py');
+      return;
+    }
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(PUSH_USER_ID)) {
+      log(`[users] PUSH_USER_ID לא תקין: ${PUSH_USER_ID}`);
+      return;
+    }
+    log(`[users] אין טוקן מוצפן לכל משתמש — משיכה אחת (API/סשן) ודחיפה כ־${PUSH_USER_ID}`);
+    try {
+      const data = await runScraper();
+      const links = data?.data?.usefulLinks || [];
+      if (links.some(l => (l.href || '').includes('forgotPassword'))) {
+        log('ERROR — Scrape returned login page.');
+        await sendTelegram(`${SESSION_EXPIRED_MSG}\n(mode: PUSH_USER_ID fallback)`);
+        await waitForCookieAndResume();
+        return;
+      }
+      log(`[users] Pushing (fallback) user ${PUSH_USER_ID} to VPS…`);
+      await pushToVPS(PUSH_USER_ID, data);
+      log(`[users] Done for user ${PUSH_USER_ID} (session/API mode)`);
+    } catch (e) {
+      log(`[users] Fallback scrape/push failed: ${e.message}`);
+      if (needsSessionRecovery(e.message)) {
+        await sendTelegram(`${SESSION_EXPIRED_MSG}\n(user: ${PUSH_USER_ID})`);
+      }
+      throw e;
+    }
     return;
   }
   log(`[users] Scraping ${users.length} active user(s)…`);
@@ -307,7 +344,10 @@ async function pushToVPS(userId, data) {
     try {
       const res = await fetch(`${VPS_URL}/api/push`, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json', 'x-push-secret': PUSH_SECRET },
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'x-push-secret': PUSH_SECRET,
+        },
         body:    JSON.stringify({ userId, data }),
         signal:  AbortSignal.timeout(PUSH_HTTP_TIMEOUT_MS),
       });

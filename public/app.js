@@ -1,3 +1,37 @@
+/* ─── Auth helpers ─────────────────────────────────────────────────────── */
+/* Reads JWT from localStorage and attaches it to API requests.
+   On 401, clears the token and redirects to /login.
+   If no token at all, redirects on first /api/ call. */
+function _wtToken() {
+  try { return localStorage.getItem('wt_token') || ''; } catch { return ''; }
+}
+function _clearAuthAndRedirect() {
+  try { localStorage.removeItem('wt_token'); localStorage.removeItem('wt_name'); } catch {}
+  if (location.pathname !== '/login') location.replace('/login');
+}
+async function authFetch(url, opts = {}) {
+  const token = _wtToken();
+  const isApi = typeof url === 'string' && url.startsWith('/api/');
+  if (isApi && !token) {
+    _clearAuthAndRedirect();
+    // Return a never-resolving promise to halt downstream parsing
+    return new Promise(() => {});
+  }
+  const headers = new Headers(opts.headers || {});
+  if (token) headers.set('Authorization', 'Bearer ' + token);
+  const res = await fetch(url, { ...opts, headers });
+  if (res.status === 401 && isApi) {
+    _clearAuthAndRedirect();
+    return new Promise(() => {});
+  }
+  return res;
+}
+// Boot-time check: if app is loaded without a token, redirect to /login.
+(function _bootAuthGuard() {
+  if (location.pathname === '/login' || location.pathname === '/register') return;
+  if (!_wtToken()) _clearAuthAndRedirect();
+})();
+
 /* ─── State ────────────────────────────────────────────────────────────── */
 let currentSection = 'homework';
 let currentStudent = null;
@@ -69,20 +103,17 @@ async function fetchAll(forceRefresh = false) {
   showErrorBanner(false);
   try {
     const url = forceRefresh ? '/api/data?refresh=1' : '/api/data';
-    const token = localStorage.getItem('wt_token');
-    if (!token) { location.replace('/login'); return; }
-    const fetchOpts = { cache: 'no-store', headers: { 'Cache-Control': 'no-cache', 'Authorization': 'Bearer ' + token } };
+    const fetchOpts = { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } };
     const results = await Promise.allSettled([
-      fetch(url, fetchOpts),
-      fetch('/api/status', fetchOpts),
-      fetch('/api/events', fetchOpts),
-      fetch('/api/children', fetchOpts),
-      fetch('/api/insights' + (currentStudent ? '?student=' + encodeURIComponent(currentStudent) : ''), fetchOpts),
-      fetch('/api/external-links', fetchOpts),
-      fetch('/api/schedule', fetchOpts),
+      authFetch(url, fetchOpts),
+      authFetch('/api/status', fetchOpts),
+      authFetch('/api/events', fetchOpts),
+      authFetch('/api/children', fetchOpts),
+      authFetch('/api/insights' + (currentStudent ? '?student=' + encodeURIComponent(currentStudent) : ''), fetchOpts),
+      authFetch('/api/external-links', fetchOpts),
+      authFetch('/api/schedule', fetchOpts),
     ]);
     const dataRes = results[0].status === 'fulfilled' ? results[0].value : null;
-    if (dataRes?.status === 401) { location.replace('/login'); return; }
     const statusRes = results[1].status === 'fulfilled' ? results[1].value : null;
     const eventsRes = results[2].status === 'fulfilled' ? results[2].value : null;
     const childrenRes = results[3].status === 'fulfilled' ? results[3].value : null;
@@ -96,7 +127,18 @@ async function fetchAll(forceRefresh = false) {
       try { return await res.json(); } catch { return fallback; }
     };
     lastData = await safeJson(dataRes, null);
-    lastData = lastData?.ok ? lastData : { ok: false, error: lastData?.error || 'No data' };
+    const inner = lastData?.data && typeof lastData.data === 'object' ? lastData.data : null;
+    const hasUsablePayload =
+      lastData
+      && typeof lastData === 'object'
+      && (
+        lastData.ok === true
+        || (inner && (
+          Array.isArray(inner.notifications)
+          || (inner.homeworkByStudent && typeof inner.homeworkByStudent === 'object')
+        ))
+      );
+    lastData = hasUsablePayload ? { ...lastData, ok: true } : { ok: false, error: lastData?.error || 'No data' };
     lastStatus = await safeJson(statusRes, {});
     lastEvents = await safeJson(eventsRes, []);
     lastChildren = await safeJson(childrenRes, { children: [] });
@@ -136,6 +178,16 @@ async function refresh() {
   if (btn) { btn.style.opacity = '0.4'; btn.style.pointerEvents = 'none'; }
   await fetchAll(true);
   if (btn) { btn.style.opacity = ''; btn.style.pointerEvents = ''; }
+}
+
+function openAdminGate() {
+  const password = prompt('סיסמת מנהל');
+  if (password !== '1920') {
+    if (password !== null) alert('סיסמה שגויה');
+    return;
+  }
+  sessionStorage.setItem('wt_admin_password', password);
+  location.href = '/admin';
 }
 
 /* ─── Timestamp display ────────────────────────────────────────────────── */
@@ -391,7 +443,7 @@ function initPhotoUpload() {
       const croppedBase64 = await openCropModal(ev.target.result);
       if (!croppedBase64) return; // user cancelled
       try {
-        const res = await fetch(`/api/children/${encodeURIComponent(currentStudent)}/photo`, {
+        const res = await authFetch(`/api/children/${encodeURIComponent(currentStudent)}/photo`, {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify({ photo: croppedBase64 }),
@@ -1725,7 +1777,7 @@ document.addEventListener('click', e => {
     if (id) markApprovalDone(id, url);
     return;
   }
-  if (e.target.closest('.btn-done, .modal-close, .child-select, #btn-refresh, .btn-retry, .btn-hw-history, .msg-checkbox-wrap, .msg-bulk-toolbar')) return;
+  if (e.target.closest('.btn-done, .modal-close, .child-select, #btn-refresh, #btn-admin, .btn-retry, .btn-hw-history, .msg-checkbox-wrap, .msg-bulk-toolbar')) return;
 
   // Close modal when clicking backdrop
   if (e.target.id === 'detail-modal') { closeModal(); return; }
@@ -1759,7 +1811,7 @@ function handleMarkDone(btn) {
 async function markMessageRead(id) {
   if (!id) return;
   try {
-    const res = await fetch('/api/messages/read', {
+    const res = await authFetch('/api/messages/read', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id }),
     });
@@ -1813,7 +1865,7 @@ async function bulkMarkMessages(asRead) {
   const ids = [..._selectedMsgIds];
   for (const id of ids) {
     try {
-      const res = await fetch('/api/messages/read', {
+      const res = await authFetch('/api/messages/read', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, read: asRead }),
       });
@@ -1833,7 +1885,7 @@ function clearMsgSelection() {
 
 async function markApprovalDone(id, webtopUrl) {
   try {
-    const res = await fetch('/api/approval/done', {
+    const res = await authFetch('/api/approval/done', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id }),
     });
@@ -1853,7 +1905,7 @@ async function markDone(id, homeworkText, studentName, btn, extra = {}) {
   btn.disabled    = true;
   btn.textContent = '...';
   try {
-    const res = await fetch('/api/homework/done', {
+    const res = await authFetch('/api/homework/done', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ id, homeworkText, studentName, ...extra }),
@@ -1937,7 +1989,7 @@ document.addEventListener('touchend', async e => {
     ptrEl.classList.add('refreshing');
     ptrTextEl.textContent = 'שולח בקשה לסריקה...';
     try {
-      await fetch('/api/trigger', { method: 'POST' });
+      await authFetch('/api/trigger', { method: 'POST' });
       ptrTextEl.textContent = '✉️ בקשה נשלחה — אם push_loop רץ בבית, ייעדכן תוך דקה';
       await fetchAll(true);
       // Poll for fresh data (home PC may push within 1-2 min)
@@ -1947,12 +1999,12 @@ document.addEventListener('touchend', async e => {
         attempts++;
         if (attempts > 8) { clearInterval(pollInterval); return; }
         try {
-          const r = await fetch('/api/data');
+          const r = await authFetch('/api/data');
           const j = await r.json();
           if (j.cacheAge !== undefined && (j.cacheAge < prevAge - 30 || (prevAge > 120 && j.cacheAge < 60))) {
             clearInterval(pollInterval);
             lastData = j;
-            const statusRes = await fetch('/api/status');
+            const statusRes = await authFetch('/api/status');
             lastStatus = await statusRes.json();
             render(j, lastStatus);
             ptrTextEl.textContent = '✅ נתונים עודכנו!';
