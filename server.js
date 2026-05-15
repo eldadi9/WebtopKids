@@ -96,7 +96,10 @@ function telegramSendTargets(primaryChatId) {
   const target = String(primaryChatId || '').trim();
   const household = telegramHouseholdChatIds();
   const out = new Set(target ? [target] : []);
-  if (target) {
+  // Fan out to the global household only if the caller's chatId is itself in
+  // the household set. Prevents a parent flagged broadcastHousehold from
+  // leaking their child's alerts to an unrelated household.
+  if (target && household.has(target)) {
     for (const x of household) out.add(x);
   }
   return [...out];
@@ -202,8 +205,12 @@ function loadSentReminders() {
   return new Set();
 }
 function saveSentReminders() {
-  try { writeFileSync(REMINDERS_FILE, JSON.stringify([...sentReminders])); }
-  catch {}
+  try {
+    writeFileSync(REMINDERS_FILE, JSON.stringify([...sentReminders]));
+  } catch (e) {
+    console.error('[saveSentReminders] disk write failed — dedup marker will not survive restart:', e.message);
+    throw e;
+  }
 }
 
 const sentReminders = loadSentReminders(); // ← persisted across restarts
@@ -217,8 +224,12 @@ function loadUserReminders(userId) {
   return new Set();
 }
 function saveUserReminders(userId, set) {
-  try { writeFileSync(join(__dirname, prefixed(`sent_reminders_${userId}.json`)), JSON.stringify([...set])); }
-  catch {}
+  try {
+    writeFileSync(join(__dirname, prefixed(`sent_reminders_${userId}.json`)), JSON.stringify([...set]));
+  } catch (e) {
+    console.error(`[saveUserReminders] disk write failed for ${userId} — dedup marker will not survive restart:`, e.message);
+    throw e;
+  }
 }
 
 // ─── ID helpers ───────────────────────────────────────────────────────────────
@@ -519,10 +530,13 @@ async function processAlertsForUser(user, data) {
   try {
     const chatId = user?.chatId;
     if (!chatId) {
-      console.warn(`[alerts] Skipping user ${user?.id} (${user?.name}) — no chatId paired`);
-      if (hasAlertableContent(data)) {
+      const expectsTelegram = user?.expectsTelegram === true || user?.broadcastHousehold === true;
+      if (expectsTelegram && hasAlertableContent(data)) {
+        // Only fail-loud when the user record explicitly expects Telegram delivery.
+        // A user who has not opted in (no chatId, no expectsTelegram flag) is silent by design.
         throw new Error(`User ${user?.id || '(unknown)'} has alertable content but no Telegram chatId`);
       }
+      console.warn(`[alerts] Skipping user ${user?.id} (${user?.name}) — no chatId paired`);
       return;
     }
     const broadcastHousehold = user?.broadcastHousehold === true;
@@ -659,6 +673,18 @@ function effectiveUserIdForRequest(req) {
   return req.user.id;
 }
 
+// Safe read for the request path: corrupt cache file = treat as missing + log.
+// loadUserCache itself throws on parse error (so writers don't silently lose data);
+// here we recover so a single corrupt file doesn't 500 every read endpoint.
+function tryLoadUserCacheForRead(userId) {
+  try {
+    return loadUserCache(userId);
+  } catch (e) {
+    console.error(`[auth] loadUserCache parse failure for ${userId} — treating as missing:`, e.message);
+    return null;
+  }
+}
+
 // Read per-user data for authenticated requests.
 // - admin: serves their own cache; if empty, falls back to PUSH_DEFAULT_USER_ID (oversight role)
 // - parent: serves ONLY their own cache (no fallback, never leaks another household's data)
@@ -669,10 +695,10 @@ function getAuthenticatedUserCache(req) {
 
   // Admin path: own cache → push-default fallback (explicit, logged when fallback fires)
   if (req.user && req.user.role === 'admin') {
-    const own = loadUserCache(userId);
+    const own = tryLoadUserCacheForRead(userId);
     if (own?.data) return { cache: own, source: 'own' };
     if (PUSH_DEFAULT_USER_ID && PUSH_DEFAULT_USER_ID !== userId) {
-      const def = loadUserCache(PUSH_DEFAULT_USER_ID);
+      const def = tryLoadUserCacheForRead(PUSH_DEFAULT_USER_ID);
       if (def?.data) {
         console.log(`[auth] admin ${userId} → fallback to PUSH_DEFAULT_USER_ID`);
         return { cache: def, source: 'push_default' };
@@ -684,7 +710,7 @@ function getAuthenticatedUserCache(req) {
   // Pre-auth (AUTH_DISABLED): legacy behavior — serve only an explicit PUSH_DEFAULT_USER_ID.
   if (!req.user) {
     if (!PUSH_DEFAULT_USER_ID) return null;
-    const def = loadUserCache(userId);
+    const def = tryLoadUserCacheForRead(userId);
     if (def?.data) return { cache: def, source: 'push_default_legacy' };
     if (PUSH_DEFAULT_USER_ID && cache?.data) {
       console.warn('[AUTH_DISABLED] serving global_legacy cache for', req.path);
@@ -694,7 +720,7 @@ function getAuthenticatedUserCache(req) {
   }
 
   // Parent path: own cache only. No fallback. If missing, return null → 503.
-  const own = loadUserCache(userId);
+  const own = tryLoadUserCacheForRead(userId);
   if (!own?.data) return null;
   return { cache: own, source: 'own' };
 }
@@ -1039,8 +1065,14 @@ app.post('/api/homework/done', maybeAuth, async (req, res) => {
     `⏰ סומן: ${timeStr} ${dateStr}`,
   ].filter(l => l !== null && l !== undefined).join('\n').replace(/\n{3,}/g, '\n\n').trim();
 
-  await sendTelegram(lines);
-  res.json({ ok: true, id, done: true });
+  let telegramOk = true;
+  try {
+    await sendTelegram(lines);
+  } catch (e) {
+    telegramOk = false;
+    console.error(`[homework/done] Telegram confirmation failed for ${id} (status already persisted):`, e.message);
+  }
+  res.json({ ok: true, id, done: true, telegramOk });
 });
 
 // POST /api/approval/done — mark approval as "אישרתי" (local status only)
@@ -1305,14 +1337,16 @@ app.post('/api/token-submit', async (req, res) => {
   if (!phone) return res.json({ message: 'נא להזין מספר טלפון' });
   const user = findUserByPhone(phone);
   if (!user) {
-    await sendTelegram(`📥 Token חדש מ-${phone} (לא רשום במערכת)\nיש להוסיף הורה זה ולאשר.`);
+    try { await sendTelegram(`📥 Token חדש מ-${phone} (לא רשום במערכת)\nיש להוסיף הורה זה ולאשר.`); }
+    catch (e) { console.error('[token-submit] admin notify failed:', e.message); }
     return res.json({ message: 'Token התקבל. המנהל יאשר את חיבורך בקרוב.' });
   }
   updateUser(user.id, {
     tokenPendingApproval: encryptToken(token),
     tokenSubmittedAt: new Date().toISOString(),
   });
-  await sendTelegram(`📥 Token חדש מ-${user.name} (${phone})\nממתין לאישורך.`);
+  try { await sendTelegram(`📥 Token חדש מ-${user.name} (${phone})\nממתין לאישורך.`); }
+  catch (e) { console.error(`[token-submit] admin notify failed for ${user.id}:`, e.message); }
   res.json({ message: 'Token התקבל! ממתין לאישור המנהל.' });
 });
 
@@ -1347,7 +1381,10 @@ app.post('/api/admin/users/:id/approve-token', requireAdminPassword, async (req,
     tokenPendingApproval: null,
     status: 'active'
   });
-  if (user.chatId) await sendTelegram('✅ חשבונך חובר! אפשר להיכנס לאפליקציה.', user.chatId, true);
+  if (user.chatId) {
+    try { await sendTelegram('✅ חשבונך חובר! אפשר להיכנס לאפליקציה.', user.chatId, true); }
+    catch (e) { console.error(`[approve-token] user notify failed for ${user.id}:`, e.message); }
+  }
   res.json({ ok: true });
 });
 
