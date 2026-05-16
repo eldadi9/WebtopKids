@@ -148,7 +148,9 @@ let pendingCookieAt = null;
 function loadStatus() {
   try {
     if (existsSync(STATUS_FILE)) return JSON.parse(readFileSync(STATUS_FILE, 'utf8'));
-  } catch {}
+  } catch (e) {
+    console.error('[loadStatus] parse failed — using empty default:', e.message);
+  }
   return {};
 }
 function saveStatus(status) {
@@ -183,7 +185,9 @@ function loadSpecialEvents() {
   try {
     if (existsSync(SPECIAL_EVENTS_FILE))
       return JSON.parse(readFileSync(SPECIAL_EVENTS_FILE, 'utf8'));
-  } catch {}
+  } catch (e) {
+    console.error('[loadSpecialEvents] parse failed — using empty default:', e.message);
+  }
   return [];
 }
 
@@ -192,7 +196,9 @@ function loadChildrenConfig() {
   try {
     if (existsSync(CHILDREN_CONFIG_FILE))
       return JSON.parse(readFileSync(CHILDREN_CONFIG_FILE, 'utf8'));
-  } catch {}
+  } catch (e) {
+    console.error('[loadChildrenConfig] parse failed — using empty default:', e.message);
+  }
   return { children: [] };
 }
 
@@ -201,7 +207,9 @@ function loadSentReminders() {
   try {
     if (existsSync(REMINDERS_FILE))
       return new Set(JSON.parse(readFileSync(REMINDERS_FILE, 'utf8')));
-  } catch {}
+  } catch (e) {
+    console.error('[loadSentReminders] parse failed — every alert will refire on next run:', e.message);
+  }
   return new Set();
 }
 function saveSentReminders() {
@@ -220,7 +228,9 @@ function loadUserReminders(userId) {
   try {
     const file = join(__dirname, prefixed(`sent_reminders_${userId}.json`));
     if (existsSync(file)) return new Set(JSON.parse(readFileSync(file, 'utf8')));
-  } catch {}
+  } catch (e) {
+    console.error(`[loadUserReminders] parse failed for ${userId} — every alert will refire for this user:`, e.message);
+  }
   return new Set();
 }
 function saveUserReminders(userId, set) {
@@ -481,26 +491,34 @@ async function checkDeadlines(dataOverride = null, sendFn = sendTelegram, remind
 }
 
 function startDeadlineReminders() {
-  setTimeout(checkDeadlines, 60 * 1000);        // 1 min after startup
-  setInterval(checkDeadlines, 60 * 60 * 1000);  // every hour
+  const tick = () => {
+    checkDeadlines().catch(e => console.error('[deadline] tick failed:', e.stack || e.message));
+  };
+  setTimeout(tick, 60 * 1000);        // 1 min after startup
+  setInterval(tick, 60 * 60 * 1000);  // every hour
 }
 
 // ─── Local scheduled scraper (VPS runs scraper itself — no home-machine daemon) ─
 async function runLocalScrape() {
   console.log('[scrape] Running local scraper...');
+  let stage = 'init';
   try {
     const prevIds = new Set((cache.data?.data?.notifications || []).map(notifId));
+    stage = 'runScraper';
     const raw     = await runScraper();
     const nowISO  = new Date().toISOString();
     const nextData = { ...raw, extractedAt: nowISO };
     const newNotifications = raw?.data?.notifications || [];
+    stage = 'sendNewAlerts';
     await sendNewAlerts(newNotifications, prevIds);
+    stage = 'checkDeadlines';
     await checkDeadlines(nextData);
+    stage = 'saveCache';
     cache = { data: nextData, timestamp: Date.now() };
     saveCacheToFile();
     console.log(`[scrape] Done — ${newNotifications.length} notifications`);
   } catch (e) {
-    console.error('[scrape] Local scrape failed:', e.message);
+    console.error(`[scrape] Local scrape failed at stage='${stage}':`, e.stack || e.message);
   }
 }
 
@@ -511,8 +529,11 @@ function startLocalScraper() {
     return;
   }
   console.log('[scrape] Local scraper enabled — first run in 30s, then every 15 min');
-  setTimeout(runLocalScrape, 30 * 1000);          // first run 30s after startup
-  setInterval(runLocalScrape, 15 * 60 * 1000);    // then every 15 min
+  const tick = () => {
+    runLocalScrape().catch(e => console.error('[scrape] tick failed (top-level):', e.stack || e.message));
+  };
+  setTimeout(tick, 30 * 1000);          // first run 30s after startup
+  setInterval(tick, 15 * 60 * 1000);    // then every 15 min
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
@@ -1531,8 +1552,17 @@ async function pollTelegram() {
       const json = await res.json();
       if (json.ok && json.result?.length) {
         for (const update of json.result) {
-          tgOffset = update.update_id + 1;
-          await handleTelegramMessage(update.message);
+          try {
+            await handleTelegramMessage(update.message);
+            // Advance offset only after successful handling so a transient
+            // failure (e.g. Telegram outbound 429) can be retried next poll.
+            tgOffset = update.update_id + 1;
+          } catch (e) {
+            // Permanent handler failure — advance offset so we don't loop
+            // on the same broken update forever, but log loudly so it's visible.
+            console.error(`[telegram] handler crashed for update ${update.update_id}; skipping:`, e.stack || e.message);
+            tgOffset = update.update_id + 1;
+          }
         }
       }
     }
@@ -1542,7 +1572,9 @@ async function pollTelegram() {
   }
   tgPolling = false;
   // Schedule next poll (100ms gap to avoid tight loop)
-  setTimeout(pollTelegram, 100);
+  setTimeout(() => {
+    pollTelegram().catch(e => console.error('[telegram] poll tick failed (top-level):', e.stack || e.message));
+  }, 100);
 }
 
 // ─── Startup ──────────────────────────────────────────────────────────────────
@@ -1556,7 +1588,7 @@ app.listen(PORT, () => {
   startDeadlineReminders();
   startLocalScraper();
   if (TELEGRAM_TOKEN && TELEGRAM_CHAT_ID) {
-    pollTelegram();
+    pollTelegram().catch(e => console.error('[telegram] initial poll failed:', e.stack || e.message));
     console.log('[telegram] Polling started — bot ready');
   }
 });
