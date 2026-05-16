@@ -574,16 +574,47 @@ async function processAlertsForUser(user, data) {
       console.error(`[processAlertsForUser] loadUserCache failed for ${user.id} — aborting to preserve prevIds:`, e.stack || e.message);
       throw e;
     }
-    const prevIds = new Set((prevCache?.data?.data?.notifications || []).map(notifId));
-
     const userReminders = loadUserReminders(user.id);
     const saveUserRem = () => saveUserReminders(user.id, userReminders);
 
-    const newNotifications = data?.data?.notifications || [];
-    await sendNewAlerts(newNotifications, prevIds, sendTelegramToUser, userReminders, saveUserRem);
-    await checkDeadlines(data, sendTelegramToUser, userReminders, saveUserRem);
+    // Per-child isolation: parents with `children: [...]` receive Telegram only
+    // for matching student names. Admin (no children list, or role==='admin')
+    // sees everything. An empty children array for a parent means "no kids" —
+    // they get nothing rather than everything (defensive default).
+    const isAdmin = user?.role === 'admin';
+    const childSet = Array.isArray(user?.children) ? new Set(user.children) : null;
+    const matchesChild = (n) => {
+      if (isAdmin) return true;
+      if (!childSet) return true; // legacy users with no children field — preserve old behavior
+      if (childSet.size === 0) return false;
+      return childSet.has(n?.student);
+    };
 
-    const newMessages = data?.data?.messages || [];
+    const allNotifications = data?.data?.notifications || [];
+    const newNotifications = allNotifications.filter(matchesChild);
+    // Re-scope prevIds to the same filtered set so dedup math stays correct.
+    const filteredPrevIds = new Set(
+      (prevCache?.data?.data?.notifications || []).filter(matchesChild).map(notifId)
+    );
+    await sendNewAlerts(newNotifications, filteredPrevIds, sendTelegramToUser, userReminders, saveUserRem);
+
+    // Deadline-check needs the same filter applied to `data.data.notifications`.
+    const dataForUser = {
+      ...data,
+      data: {
+        ...(data?.data || {}),
+        notifications: newNotifications,
+      },
+    };
+    await checkDeadlines(dataForUser, sendTelegramToUser, userReminders, saveUserRem);
+
+    const allMessages = data?.data?.messages || [];
+    const newMessages = allMessages.filter((m) => {
+      if (isAdmin) return true;
+      if (!childSet) return true;
+      if (childSet.size === 0) return false;
+      return childSet.has(m?.student);
+    });
     const seenMsgKeys = new Set();
     const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
     const normSubject = (s) => norm(s).replace(/^\s*תק\s+/, '').slice(0, 60);
