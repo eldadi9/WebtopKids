@@ -14,8 +14,10 @@
     "install-browsers-deps": "npx playwright install-deps chromium"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "capsolver-npm": "^2.1.10",
     "express": "^4.21.0",
+    "jsonwebtoken": "^9.0.3",
     "patchright": "^1.58.2",
     "playwright": "^1.44.0",
     "playwright-extra": "^4.3.6",
