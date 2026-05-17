@@ -49,6 +49,23 @@ Thumbs.db
 
 # Editor
 .vscode/
+.cursor/
 scrape_output*.json
 users.json
 data_cache_*.json
+
+# Codex / tooling logs
+.codex-*.log
+.codex-*.out.log
+.codex-*.err.log
+watchdog.log
+
+# DEV cache + audit artifacts (local-only)
+dev_data_cache_*.json
+dev_sent_reminders_*.json
+vps_data_check.json
+audit_results.json
+app_feed.png
+
+# Playwright MCP scratch
+.playwright-mcp/
