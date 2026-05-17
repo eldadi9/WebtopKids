@@ -259,7 +259,12 @@ function runScraper() {
 }
 
 // ─── Quiet hours — no alerts between 21:00 and 07:00 Israel time ─────────────
+// DEV/test override: set QUIET_HOURS_DISABLED=true to bypass the window.
+// Production must NEVER set this — it would let alerts wake the family at night.
 function isQuietHours() {
+  if (String(process.env.QUIET_HOURS_DISABLED || '').toLowerCase() === 'true') {
+    return false;
+  }
   const israelHour = parseInt(
     new Date().toLocaleString('he-IL', { hour: 'numeric', hour12: false, timeZone: 'Asia/Jerusalem' }),
     10
@@ -1619,7 +1624,11 @@ app.listen(PORT, () => {
   startDeadlineReminders();
   startLocalScraper();
   if (TELEGRAM_TOKEN && TELEGRAM_CHAT_ID) {
-    pollTelegram().catch(e => console.error('[telegram] initial poll failed:', e.stack || e.message));
-    console.log('[telegram] Polling started — bot ready');
+    if (String(process.env.DISABLE_TELEGRAM_POLLING || '').toLowerCase() === 'true') {
+      console.log('[telegram] Polling disabled by DISABLE_TELEGRAM_POLLING=true (outbound sendMessage still works)');
+    } else {
+      pollTelegram().catch(e => console.error('[telegram] initial poll failed:', e.stack || e.message));
+      console.log('[telegram] Polling started — bot ready');
+    }
   }
 });
