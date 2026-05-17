@@ -55,6 +55,11 @@ const TIMEOUT       = 30_000;
 
 const TG_TOKEN        = process.env.TELEGRAM_BOT_TOKEN;
 const TG_CHAT_ID      = process.env.TELEGRAM_CHAT_ID;
+const TG_EXTRA_CHAT_IDS = (process.env.TELEGRAM_EXTRA_CHAT_IDS || '')
+  .split(/[,\s]+/)
+  .map((s) => s.trim())
+  .filter(Boolean)
+  .filter((id, i, a) => a.indexOf(id) === i);
 const CAPSOLVER_KEY   = process.env.CAPSOLVER_KEY;   // optional — enables auto-CAPTCHA solve
 const RECAPTCHA_SITEKEY = '6Lf-Bz4qAAAAAClftyz9ZpD7TJ93bQ15wpoiuLLJ'; // webtop.smartschool.co.il
 
@@ -65,14 +70,17 @@ function log(msg) {
 
 async function sendTelegram(msg) {
   if (!TG_TOKEN || !TG_CHAT_ID) return;
-  try {
-    await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: TG_CHAT_ID, text: msg }),
-      signal: AbortSignal.timeout(8_000),
-    });
-  } catch {}
+  const targets = [...new Set([String(TG_CHAT_ID).trim(), ...TG_EXTRA_CHAT_IDS].filter(Boolean))];
+  for (const chat_id of targets) {
+    try {
+      await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ chat_id, text: msg }),
+        signal: AbortSignal.timeout(8_000),
+      });
+    } catch { /* ignore */ }
+  }
 }
 
 // ─── Shared launch options ────────────────────────────────────────────────────
