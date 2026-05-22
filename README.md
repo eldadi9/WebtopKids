@@ -1,3 +1,14 @@
+## WebtopKids — School Portal Automation & Telegram Alerts
+
+Automated system that fetches homework assignments, teacher messages, event alerts, and grades from the Israeli Webtop SmartSchool portal, separates data per child, and delivers real-time Telegram notifications to parents with deadline reminders.
+
+**Stack:** Node.js · Playwright · Telegram Bot API · VPS · scheduled automation  
+**Status:** Live on VPS — 17/17 tests passing
+
+[Hebrew documentation below / תיעוד בעברית למטה]
+
+---
+
 # WebtopKids 🎒
 
 אפליקציה לניוד נתונים מבית הספר Webtop SmartSchool — שיעורי בית, התראות, הודעות, אירועים וקישורים.
