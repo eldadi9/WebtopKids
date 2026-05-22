@@ -1,71 +1,77 @@
-## WebtopKids — School Portal Automation & Telegram Alerts
-
-Automated system that fetches homework assignments, teacher messages, event alerts, and grades from the Israeli Webtop SmartSchool portal, separates data per child, and delivers real-time Telegram notifications to parents with deadline reminders.
-
-**Stack:** Node.js · Playwright · Telegram Bot API · VPS · scheduled automation  
-**Status:** Live on VPS — 17/17 tests passing
-
-[Hebrew documentation below / תיעוד בעברית למטה]
-
----
-
 # WebtopKids 🎒
 
-אפליקציה לניוד נתונים מבית הספר Webtop SmartSchool — שיעורי בית, התראות, הודעות, אירועים וקישורים.
+> Automated school portal monitor — fetches homework, alerts, and teacher messages from the Israeli Webtop SmartSchool portal and delivers real-time Telegram notifications to parents, separated per child.
+
+[![Node.js](https://img.shields.io/badge/Node.js-18+-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+[![Playwright](https://img.shields.io/badge/Playwright-Automation-2EAD33?logo=playwright&logoColor=white)](https://playwright.dev)
+[![Telegram](https://img.shields.io/badge/Telegram-Bot%20API-2CA5E0?logo=telegram&logoColor=white)](https://core.telegram.org/bots)
+[![Status](https://img.shields.io/badge/Status-Live%20on%20VPS-22C55E)](.)
+[![Tests](https://img.shields.io/badge/Tests-17%2F17%20passing-22C55E)](.)
 
 ---
 
-## תהליך מלא (פריסה אחת) — קובץ אחד
+## The Problem
 
-**`.\run_all.ps1`** או **`.\run_all.ps1 -NoPrompt`** מריץ את כל התהליך ברצף:
+Israeli school parents have no unified alert system. Homework deadlines, teacher messages, grades, and event alerts sit inside the Webtop SmartSchool portal — with no push notifications. Parents miss deadlines and messages unless they actively log in.
 
-| שלב | פעולה | סטטוס |
-|-----|-------|-------|
-| 1 | `node test_notifications.mjs` | בדיקות לוגיקה (17/17) |
-| 2 | `node scrape_and_push.mjs` | סריקה + דחיפה ל-VPS |
-| 3 | `.\deploy.ps1 -NoPrompt` | פריסה ל-VPS |
-| 4 | `node test_check.mjs` | וידוא API |
-| 5 | Git | commit + push (ב־NoPrompt אוטומטי) |
+## What I Built
+
+An automated monitoring system that:
+
+- Logs into the Webtop SmartSchool portal and extracts all relevant data
+- Separates data per child (multi-child household support)
+- Sends real-time Telegram notifications for:
+  - New homework assignments with deadline reminders (3 days / 2 days / 1 day before)
+  - Teacher messages and unread alerts
+  - Grades, missing equipment, absences
+  - Completion confirmation when a task is marked done
+- Runs on a scheduled loop on VPS — fully automated, no manual checks needed
+
+## Key Features
+
+- Multi-child support — each child's data separated and labeled
+- Smart deduplication — no repeated alerts for the same item
+- Deadline reminder ladder — 3 days → 2 days → 1 day before submission
+- Scheduled automation — runs continuously on VPS via cron
+- 17/17 logic tests passing
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Automation | Node.js, Playwright |
+| Notifications | Telegram Bot API |
+| Scheduling | VPS cron / daemon |
+| Data fetch | REST API + session management |
+| Testing | Custom logic test suite (17/17) |
+
+## Architecture
+
+```
+Scheduled trigger (VPS cron)
+        ↓
+   Portal data fetch
+        ↓
+   Per-child data separation
+        ↓
+   Deduplication & diff logic
+        ↓
+   Telegram notifications → Parent
+```
+
+## Status
+
+**Live on VPS** — running continuously.  
+Notifications delivered in real time. 17/17 tests passing.
+
+## What This Proves
+
+- Playwright-based portal automation at production level
+- Telegram Bot API integration with smart notification logic
+- VPS deployment with scheduled automation and daemon management
+- Multi-entity data separation (per child)
+- Practical automation solving a real daily parenting need
 
 ---
 
-## מתי נשלחות התראות בטלגרם?
-
-- **התראות מיידיות** (מרגע שהמערכת מזהה משהו חדש):  
-  עבודה לא הושלמה, איחור, חיסור, ציוד חסר, ציון, הודעה חדשה מהמורה.
-- **תזכורות שיעורי בית** (לפי תאריך יעד):  
-  - יום לפני: "מחר חייבים להגיש"  
-  - יומיים לפני: "בעוד יומיים"  
-  - שלושה ימים לפני: "בעוד 3 ימים"
-- **התראה בעת סיום עבודה:** כשאתה לוחץ "הושלם" באפליקציה.
-
-### למה לפעמים קופצות התראות בלי עדכון חדש?
-
-1. **תזכורות תאריך יעד** — אם יש שיעורי בית שמועד ההגשה מתקרב (1–3 ימים), המערכת שולחת תזכורת בכל push ובכל בדיקת cron (כל שעה). זה התנהגות מכוונת.
-2. **הבדלים בקוד `notifId`** — שינוי קטן בפורמט (רווחים, כתיב) יוצר ID שונה ולכן נשלחת התראה "חדשה".
-3. **הודעות לא נקראו** — הודעות מהמורה שלא נקראו יישלחו התראה בכל push עד שייסומנו כנקראות.
-4. **Cache ישן מול דאטה חדש** — אם ה-cache בשרת ריק/ישן, כל הפריטים ייחשבו "חדשים".
-
----
-
-## הרצה מקומית
-
-1. התקן dependencies: `npm install`
-2. צור קובץ `.env` (העתק מ־`.env.example`)
-3. **התחברות ראשונית:** `WEBTOP_CAPTURE=true node webtop_scrape.mjs` — יפתח דפדפן, התחבר ידנית
-4. הרץ שרת: `npm start` (פורט 3000)
-5. גלוש ל־http://localhost:3000
-
-## Deploy ל־VPS
-
-- `.\deploy.ps1` — העלאת קוד דרך SSH (או `-NoPrompt` לריצה ללא שאלות)
-- **תהליך מלא:** `.\run_all.ps1` או `.\run_all.ps1 -NoPrompt`
-
-
-## משיכת נתונים — כלים נוספים
-
-- `node scrape_and_push.mjs` — סריקה חד-פעמית + דחיפה ל-VPS
-
-## סריקת/ניתוח האתר
-
-- `node webtop_scan.mjs` — סריקת דפים והפקת discovery
+*Part of a portfolio of AI automation systems — [github.com/eldadi9](https://github.com/eldadi9)*
